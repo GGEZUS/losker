@@ -1,0 +1,56 @@
+#!/bin/sh
+# fix-input — recover a dead Surface Type Cover (touchpad/pointer frozen,
+# clicks dead, keyboard+touch still working).
+#
+# Captures diagnostics for later analysis, then re-enumerates the Type
+# Cover via USB unbind/bind: the software equivalent of detaching and
+# reattaching the cover. Also forces the compositor to rebuild its input
+# seat (USB hotplug), which clears wedged seat state.
+#
+# Run as: sudo fix-input   (NOPASSWD entry in /etc/sudoers.d/fix-input)
+
+set -u
+LOGDIR=/var/log/fix-input
+mkdir -p "$LOGDIR"
+OUT="$LOGDIR/$(date +%Y%m%d-%H%M%S).log"
+
+# locate the Type Cover by usb id (vendor Microsoft, product Type Cover)
+COVER=""
+for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] || continue
+    v=$(cat "$d/idVendor")
+    p=$(cat "$d/idProduct" 2>/dev/null)
+    if [ "$v" = "045e" ] && [ "$p" = "096f" ]; then
+        COVER="$d"
+    fi
+done
+
+{
+    echo "=== fix-input $(date) ==="
+    echo "cover: ${COVER:-NOT FOUND}"
+    if [ -n "$COVER" ]; then
+        echo "power/control=$(cat "$COVER/power/control" 2>/dev/null)"
+        echo "power/runtime_status=$(cat "$COVER/power/runtime_status" 2>/dev/null)"
+    fi
+    echo "--- /proc/bus/input/devices ---"
+    cat /proc/bus/input/devices
+    echo "--- recent input/usb/wayland journal ---"
+    journalctl -b --no-pager -n 200 2>/dev/null | grep -iE 'usb|hid|input|wayland' | tail -40
+    echo "--- user session journal tail ---"
+    journalctl --user -b --no-pager -n 30 -u niri.service 2>/dev/null | tail -15
+} >> "$OUT" 2>&1
+
+if [ -z "$COVER" ]; then
+    echo "fix-input: no 045e:096f device found — diagnostics logged to $OUT" >&2
+    exit 1
+fi
+
+DEV=$(basename "$COVER")
+if echo "$DEV" > /sys/bus/usb/drivers/usb/unbind 2>>"$OUT"; then
+    sleep 1
+    echo "$DEV" > /sys/bus/usb/drivers/usb/bind 2>>"$OUT"
+    echo "fix-input: rebound $DEV — pointer should be back. logged: $OUT"
+else
+    echo "fix-input: unbind failed (device name mismatch?) — logged: $OUT" >&2
+    exit 1
+fi

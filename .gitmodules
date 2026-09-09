@@ -1,0 +1,3 @@
+[submodule "tools/vendor/fetch"]
+	path = tools/vendor/fetch
+	url = https://github.com/areofyl/fetch

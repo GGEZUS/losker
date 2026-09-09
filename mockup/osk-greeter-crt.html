@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>osk-greeter · CRT design mockup</title>
+<style>
+  :root {
+    --crt-black: #050a07;
+    --phos-hi:   #49ff88;
+    --phos:      #2bd96b;
+    --phos-dim:  #1a8f4c;
+    --phos-faint:#0f4d2a;
+    --deny:      #ff4d5e;
+    --hot:       #d6ffe6;
+    --deep:      #11633a;
+    --mono: "DejaVu Sans Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #0c0f0d;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 12px; padding: 16px;
+    font-family: var(--mono);
+    color: #9aa39c;
+  }
+  .note { font-size: 12px; letter-spacing: .08em; }
+  .note b { color: var(--phos); }
+
+  /* ── the tablet screen ─────────────────────────────── */
+  .crt {
+    position: relative;
+    container-type: size;
+    aspect-ratio: 3 / 2;
+    height: min(80vh, 92vw * 2 / 3);
+    max-width: 94vw;
+    background: var(--crt-black);
+    border: 3px solid #1a211c;
+    border-radius: 10px;
+    overflow: hidden;
+    user-select: none;
+    color: var(--phos);
+  }
+  .crt::before {
+    content: ""; position: absolute; inset: 0; z-index: 40; pointer-events: none;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(0,0,0,0) 0px, rgba(0,0,0,0) 2px,
+      rgba(0,0,0,.22) 2px, rgba(0,0,0,.22) 3px);
+  }
+  .crt::after {
+    content: ""; position: absolute; inset: 0; z-index: 41; pointer-events: none;
+    background: radial-gradient(ellipse 120% 110% at 50% 45%,
+      rgba(0,0,0,0) 55%, rgba(0,0,0,.5) 100%);
+  }
+  .flicker {
+    position: absolute; inset: 0; z-index: 42; pointer-events: none;
+    background: var(--phos-hi); mix-blend-mode: overlay; opacity: 0;
+    animation: flick 3.7s steps(1) infinite;
+  }
+  @keyframes flick {
+    0%,100% {opacity:0} 91% {opacity:.03} 91.5% {opacity:0} 94% {opacity:.02} 94.3% {opacity:0}
+  }
+  @media (prefers-reduced-motion: reduce) { .flicker { animation: none; } }
+
+  .screen {
+    position: absolute; inset: 0; z-index: 10;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    padding: 3.2cqh 2.6cqw;
+  }
+
+  /* ── boot log ──────────────────────────────────────── */
+  .bootlog {
+    font-size: 1.95cqh; line-height: 1.6;
+    color: var(--phos-dim);
+    white-space: pre; overflow: hidden;
+    text-shadow: 0 0 5px rgba(43,217,107,.3);
+    height: 26cqh;
+  }
+  .bootlog .ok   { color: var(--phos); }
+  .bootlog .deep { color: var(--deep); }
+  .statusline {
+    position: absolute; top: 3.2cqh; right: 2.6cqw;
+    font-size: 1.95cqh; color: var(--phos-dim); letter-spacing: .1em;
+  }
+
+  /* ── login block (pure typography, no card) ────────── */
+  .login { align-self: center; text-align: left; width: 64cqw; }
+  .banner {
+    font-size: 5.0cqh; font-weight: 700; letter-spacing: .3em;
+    color: var(--phos-hi);
+    text-shadow: 0 0 8px rgba(73,255,136,.8), 0 0 26px rgba(73,255,136,.35);
+    margin-bottom: .5em;
+  }
+  .banner-sub {
+    font-size: 1.85cqh; letter-spacing: .26em; color: var(--phos-dim);
+    margin-bottom: 3.8cqh;
+  }
+  .banner-sub::after { content: "  ════════════════"; color: var(--phos-faint); }
+
+  .authmsg { min-height: 2.8cqh; font-size: 2.1cqh; letter-spacing: .08em; }
+  .authmsg.ok  { color: var(--phos-hi); text-shadow: 0 0 10px rgba(73,255,136,.7); }
+  .authmsg.err { color: var(--deny);   text-shadow: 0 0 10px rgba(255,77,94,.6); }
+  .authmsg.run { color: var(--phos-dim); }
+
+  .frow {
+    display: flex; align-items: baseline; gap: 2cqw;
+    font-size: 2.85cqh; margin-top: 2.4cqh;
+    padding-bottom: .8cqh;
+    border-bottom: 1px solid var(--phos-faint);
+  }
+  .frow label { color: var(--phos-dim); flex: none; letter-spacing: .05em; }
+  .frow .val { color: var(--phos); text-shadow: 0 0 6px rgba(43,217,107,.5); white-space: pre; }
+  .frow.session .val { color: var(--phos-dim); cursor: pointer; }
+
+  .cursor {
+    display: inline-block; width: .62em; height: 1.02em;
+    background: var(--phos-hi); vertical-align: text-bottom;
+    box-shadow: 0 0 10px rgba(73,255,136,.9);
+    animation: blink 1.06s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+  .meta-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-top: 3.4cqh; font-size: 1.85cqh;
+  }
+  .pwr { display: flex; gap: 2.2cqw; }
+  .pwr span {
+    color: var(--phos-dim); border: 1px solid var(--phos-faint);
+    padding: .5cqh 1.3cqw; cursor: pointer; letter-spacing: .12em;
+  }
+  .pwr span:active { background: var(--phos-faint); color: var(--phos); }
+  .hint { color: var(--deep); letter-spacing: .1em; }
+
+  /* denied glitch */
+  .crt.denied .screen { animation: shake .38s linear; }
+  @keyframes shake {
+    0%,100% { transform: translate(0,0) }
+    20% { transform: translate(-1.1cqw, .4cqh) }
+    40% { transform: translate(.9cqw, -.5cqh) }
+    60% { transform: translate(-.6cqw, -.2cqh) }
+    80% { transform: translate(.5cqw, .3cqh) }
+  }
+  /* granted bloom */
+  .crt.granted .screen { animation: bloom 1.1s ease-out; }
+  @keyframes bloom {
+    0%   { filter: brightness(1); }
+    12%  { filter: brightness(2.2) saturate(1.4); }
+    100% { filter: brightness(1); }
+  }
+
+  /* ── OSK deck ──────────────────────────────────────── */
+  .osk { display: flex; flex-direction: column; gap: .85cqh; padding: 1.2cqh 0 .3cqh; }
+  .krow { display: flex; gap: .65cqw; flex: 1; height: 7.2cqh; }
+  .key {
+    flex: 1; display: grid; place-items: center;
+    border: 1px solid var(--phos-faint);
+    color: var(--phos); font-size: 2.55cqh; font-family: var(--mono);
+    background: rgba(43,217,107,.03);
+    cursor: pointer; border-radius: 0;
+    text-shadow: 0 0 6px rgba(43,217,107,.35);
+  }
+  .key:active {
+    background: var(--phos); color: var(--crt-black); text-shadow: none;
+    box-shadow: 0 0 14px rgba(73,255,136,.5);
+  }
+  .key.sp { color: var(--phos-dim); font-size: 1.75cqh; letter-spacing: .1em; flex: 1.6; }
+  .key.sp.on { background: var(--phos-dim); color: var(--crt-black); text-shadow: none; }
+  .key.space { flex: 6; color: var(--phos-dim); letter-spacing: .4em; }
+  .key.ret { flex: 2.4; }
+  .osk-cap {
+    font-size: 1.6cqh; color: var(--deep); letter-spacing: .22em;
+    display: flex; justify-content: space-between;
+  }
+</style>
+</head>
+<body>
+
+<div class="note"><b>osk-greeter</b> · CRT design mockup — tap the deck, <b>RET</b> runs the auth theater</div>
+
+<div class="crt" id="crt">
+  <div class="flicker"></div>
+  <div class="statusline">tty1 · surarch · 21:47</div>
+
+  <div class="screen" id="screen">
+    <div>
+      <div class="bootlog" id="bootlog"></div>
+
+      <div class="login">
+        <div class="banner">AUTHORIZATION REQUIRED</div>
+        <div class="banner-sub">RESTRICTED TERMINAL // PHOSPHOR/1</div>
+
+        <div class="authmsg" id="authmsg"></div>
+
+        <div class="frow">
+          <label>surarch login:</label>
+          <span class="val">rbc</span>
+        </div>
+        <div class="frow">
+          <label>Password:</label>
+          <span class="val" id="pw"></span>
+          <span class="cursor"></span>
+        </div>
+        <div class="frow session">
+          <label>session:</label>
+          <span class="val" id="sess">niri ▾</span>
+        </div>
+
+        <div class="meta-row">
+          <div class="pwr">
+            <span onclick="power('REBOOT')">[ REBOOT ]</span>
+            <span onclick="power('POWEROFF')">[ POWEROFF ]</span>
+          </div>
+          <div class="hint">RET AUTHENTICATES</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="osk">
+      <div class="osk-cap"><span>MANUAL ENTRY DECK</span><span>P1-COMPATIBLE</span></div>
+      <div class="krow" id="kr0"></div>
+      <div class="krow" id="kr1"></div>
+      <div class="krow" id="kr2"></div>
+      <div class="krow" id="kr3"></div>
+      <div class="krow" id="kr4"></div>
+    </div>
+  </div>
+</div>
+
+<div class="note">denied-path demo: enter password <b>fail</b> then RET</div>
+
+<script>
+/* ── boot log theater ─────────────────────────────── */
+const LOG = [
+  ['ts',  '[    0.000000] phosphor display matrix .......... '],
+  ['ok',  'online'],
+  ['ts',  '[    0.184221] crt deflection coils ............. '],
+  ['ok',  'ok'],
+  ['ts',  '[    0.390014] scanline generator @ 15.6kHz ...... '],
+  ['ok',  'ok'],
+  ['ts',  '[    1.002931] touch entry deck ................... '],
+  ['ok',  'detected'],
+  ['ts',  '[    1.558720] virtual console /dev/tty1 .......... '],
+  ['ok',  'listening'],
+  ['ok',  '[  OK  ] reached target graphical interface'],
+  ['deep',''],
+  ['deep','this terminal requires operator authorization.'],
+  ['deep','all input is monitored. have a pleasant day, operator.'],
+];
+const BEATS = ['[  OK  ] phosphor decay compensation complete',
+               '[  ..  ] humming along',
+               '[  OK  ] beam focus recalibrated',
+               '[  ..  ] watching the door'];
+
+const bootlog = document.getElementById('bootlog');
+let li = 0;
+function typeLine() {
+  if (li >= LOG.length) { setTimeout(heartbeat, 4500); return; }
+  const [cls, text] = LOG[li++];
+  if (cls === 'ok') {
+    bootlog.insertAdjacentHTML('beforeend',
+      text.startsWith('[') ? `<span class="ok">${text}</span>\n`
+                           : `<span class="ts">${LOG[li-2][1]}</span><span class="ok">${text}</span>\n`);
+    if (text.startsWith('[')) return setTimeout(typeLine, 140);
+    // the ts was already emitted by the pair above: skip the ts-only entry
+  } else if (cls === 'ts') {
+    // hold; will be paired with its ok on next call
+  } else {
+    bootlog.insertAdjacentHTML('beforeend', `<span class="deep">${text}</span>\n`);
+  }
+  setTimeout(typeLine, 110 + Math.random() * 150);
+}
+function heartbeat() {
+  const b = BEATS[Math.floor(Math.random() * BEATS.length)];
+  bootlog.insertAdjacentHTML('beforeend', `<span class="deep">${b}</span>\n`);
+  while (bootlog.childNodes.length > 24) bootlog.firstChild.remove();
+  setTimeout(heartbeat, 5000 + Math.random() * 7000);
+}
+setTimeout(typeLine, 400);
+
+/* ── keyboard ─────────────────────────────────────── */
+const ROWS = [
+  ['1','2','3','4','5','6','7','8','9','0'],
+  ['q','w','e','r','t','y','u','i','o','p'],
+  ['a','s','d','f','g','h','j','k','l',';'],
+  ['z','x','c','v','b','n','m',',','.','/'],
+];
+const SYM = [
+  ['!','@','#','$','%','^','&','*','(',')'],
+  ['~','`','|','\\','{','}','[',']','<','>'],
+  ['-','_','+','=',':','"',"'",'?','!','*'],
+  ['€','§','¶','†','©','°','·','…','—','\\'],
+];
+let buffer = '', shifted = false, symLayer = false, busy = false;
+const pwEl = document.getElementById('pw');
+const msgEl = document.getElementById('authmsg');
+const crtEl = document.getElementById('crt');
+
+const lab = k => shifted ? k.toUpperCase() : k;
+
+function mkKey(parent, label, cls, fn) {
+  const el = document.createElement('div');
+  el.className = 'key' + (cls ? ' ' + cls : '');
+  el.textContent = label;
+  el.onpointerdown = fn;
+  parent.appendChild(el);
+  return el;
+}
+function buildKeyboard() {
+  const rows = symLayer ? SYM : ROWS;
+  // kr0: number row · kr1/kr2: letter rows · kr3: SHIFT + letters + DEL · kr4: NUM SPACE RET
+  for (let r = 0; r < 3; r++) {
+    const rowEl = document.getElementById('kr' + r);
+    rowEl.innerHTML = '';
+    rows[r].forEach(k => mkKey(rowEl, lab(k), '', () => tap(k)));
+  }
+  const r3 = document.getElementById('kr3');
+  r3.innerHTML = '';
+  const shiftKey = mkKey(r3, 'SHIFT', 'sp', () => { shifted = !shifted; buildKeyboard(); });
+  if (shifted) shiftKey.classList.add('on');
+  rows[3].forEach(k => mkKey(r3, lab(k), '', () => tap(k)));
+  mkKey(r3, 'DEL', 'sp', () => { buffer = buffer.slice(0, -1); render(); });
+  const r4 = document.getElementById('kr4');
+  r4.innerHTML = '';
+  mkKey(r4, symLayer ? 'ABC' : 'NUM', 'sp', () => { symLayer = !symLayer; buildKeyboard(); });
+  mkKey(r4, 'SPACE', 'space', () => { buffer += ' '; render(); });
+  mkKey(r4, 'RET', 'ret sp', () => submit());
+}
+function tap(k) {
+  if (busy) return;
+  buffer += shifted ? k.toUpperCase() : k;
+  if (shifted) { shifted = false; buildKeyboard(); }
+  render();
+}
+function render() { pwEl.textContent = '•'.repeat(buffer.length); }
+
+/* ── auth theater ─────────────────────────────────── */
+function submit() {
+  if (busy) return;
+  if (!buffer.length) { msg('RET again to authenticate', 'run'); return; }
+  busy = true;
+  msg('verifying credentials against PAM …', 'run');
+  setTimeout(() => {
+    if (buffer === 'fail') {
+      msg('ACCESS DENIED — identity rejected', 'err');
+      crtEl.classList.remove('denied'); void crtEl.offsetWidth;
+      crtEl.classList.add('denied');
+      logline('[ FAILED ] operator authentication', 'deny');
+      buffer = ''; render(); busy = false;
+    } else {
+      msg('ACCESS GRANTED — welcome, operator', 'ok');
+      crtEl.classList.remove('granted'); void crtEl.offsetWidth;
+      crtEl.classList.add('granted');
+      logline('[  OK  ] session "niri" starting for rbc', 'ok');
+      setTimeout(() => { buffer = ''; render(); msg('', ''); busy = false; }, 2400);
+    }
+  }, 900);
+}
+function power(x) {
+  if (busy) return;
+  msg(`sending ${x.toLowerCase()} to logind …`, 'run');
+  logline(`[ ASKED ] systemctl ${x.toLowerCase()}`, 'deep');
+}
+function msg(text, cls) { msgEl.textContent = text; msgEl.className = 'authmsg ' + cls; }
+function logline(text, cls) {
+  const color = cls === 'deny' ? 'var(--deny)' : cls === 'ok' ? 'var(--phos)' : 'var(--deep)';
+  bootlog.insertAdjacentHTML('beforeend', `<span style="color:${color}">${text}</span>\n`);
+  while (bootlog.childNodes.length > 24) bootlog.firstChild.remove();
+}
+
+/* session picker: cycles on tap */
+const SESS = ['niri', 'niri --debug', 'bash (tty)'];
+let si = 0;
+document.getElementById('sess').onpointerdown = () => {
+  si = (si + 1) % SESS.length;
+  document.getElementById('sess').textContent = SESS[si] + ' ▾';
+};
+
+buildKeyboard();
+</script>
+</body>
+</html>

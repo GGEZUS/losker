@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>osk-greeter · phased mockup (gtkgreet + wvkbd)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: #101216;
+    color: #e6e6e6;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    gap: 14px; padding: 18px; min-height: 100%;
+  }
+  .pagetitle { font-size: 15px; color: #9aa0aa; }
+  .pagetitle b { color: #e6e6e6; }
+
+  /* ---------- the tablet ---------- */
+  .device {
+    container-type: size;
+    aspect-ratio: 3 / 2;
+    height: min(78vh, 92vw * 2 / 3);
+    max-width: 94vw;
+    border-radius: 14px;
+    border: 3px solid #2a2d33;
+    overflow: hidden;
+    display: grid;
+    grid-template-rows: 1fr auto;
+    background:
+      radial-gradient(120% 90% at 70% 10%, #274050 0%, transparent 55%),
+      radial-gradient(100% 80% at 20% 90%, #3d2a4a 0%, transparent 50%),
+      linear-gradient(160deg, #171a1f 0%, #101216 60%, #0c0d10 100%);
+    position: relative;
+    box-shadow: 0 18px 60px rgba(0,0,0,.55);
+    user-select: none;
+  }
+
+  /* ---------- gtkgreet window ---------- */
+  .greeter-area { display: grid; place-items: center; padding: 4cqh 6cq; }
+  .gtkgreet {
+    width: 34cqw;
+    background: #1d2026;
+    border: 1px solid #34383f;
+    border-radius: 10px;
+    padding: 3.2cqh 3.4cqw;
+    box-shadow: 0 10px 34px rgba(0,0,0,.45);
+    font-size: 2.4cqh;
+  }
+  .gtkgreet h1 { font-size: 1.25em; font-weight: 600; margin-bottom: .7em; letter-spacing: .02em; }
+  .field { margin-bottom: 1em; }
+  .field label { display: block; font-size: .78em; color: #98a0ab; margin-bottom: .3em; }
+  .field input, .field select {
+    width: 100%;
+    background: #14161a;
+    border: 1px solid #3a3f47;
+    border-radius: 6px;
+    color: #e6e6e6;
+    padding: .55em .7em;
+    font-size: 1em;
+    font-family: inherit;
+    outline: none;
+  }
+  .field input:focus { border-color: #5b7f9e; }
+  .row { display: flex; gap: .8em; align-items: center; }
+  .login-btn {
+    flex: none;
+    background: #3d5a75; color: #fff; border: none; border-radius: 6px;
+    padding: .55em 1.2em; font-size: 1em; cursor: pointer;
+  }
+  .login-btn:active { background: #4d7091; }
+  .status { min-height: 1.3em; font-size: .8em; color: #8fbf9f; margin-top: .6em; }
+  .status.error { color: #d08a8a; }
+
+  /* ---------- wvkbd ---------- */
+  .wvkbd {
+    background: #17181b;
+    border-top: 1px solid #2c2f35;
+    padding: .8cqh 1cqw;
+    display: flex; flex-direction: column; gap: .9cqh;
+    font-size: 2.5cqh;
+  }
+  .kb-row { display: flex; gap: .8cqw; flex: 1; }
+  .key {
+    flex: 1;
+    display: grid; place-items: center;
+    background: #26282d;
+    border-radius: .55cqh;
+    color: #e8e8e8;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .key:active { background: #3d4148; }
+  .key.mod { background: #1e2b33; color: #9fc3da; }
+  .key.mod.on { background: #2e4a5c; }
+  .key.wide { flex: 4.2; }
+  .key.wider { flex: 1.8; }
+  .kbd-label {
+    position: absolute; top: 1.2cqh; right: 1.6cqw;
+    font-size: 1.7cqh; color: #565b63; font-family: ui-monospace, monospace;
+  }
+
+  /* ---------- footer ---------- */
+  .links { max-width: 760px; font-size: 13px; line-height: 1.7; color: #9aa0aa; text-align: center; }
+  .links a { color: #7fb0d8; text-decoration: none; }
+  .links a:hover { text-decoration: underline; }
+  .links code { color: #c9cdd4; background:#1a1d22; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<div class="pagetitle"><b>phased greeter mockup</b> — greetd → cage → gtkgreet + wvkbd · tap the keys, it works</div>
+
+<div class="device" id="device">
+  <div class="kbd-label">cage · tty1</div>
+
+  <div class="greeter-area">
+    <div class="gtkgreet">
+      <h1>Login</h1>
+      <div class="field">
+        <label>Username</label>
+        <input type="text" value="rbc" readonly>
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="text" id="pw" value="" placeholder="tap the keyboard below…" readonly>
+      </div>
+      <div class="field">
+        <label>Session</label>
+        <select>
+          <option>niri</option>
+          <option>bash (TTY)</option>
+        </select>
+      </div>
+      <div class="row">
+        <button class="login-btn" id="go">Login</button>
+        <div class="status" id="status"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wvkbd" id="wvkbd">
+    <div class="kb-row" data-row="1"></div>
+    <div class="kb-row" data-row="2"></div>
+    <div class="kb-row" data-row="3"></div>
+    <div class="kb-row" data-row="4"></div>
+  </div>
+</div>
+
+<div class="links">
+  real components this mockup imitates —
+  <a href="https://github.com/jjsullivan5196/wvkbd">wvkbd</a> (the keyboard,
+  <a href="https://raw.githubusercontent.com/jjsullivan5196/wvkbd/master/contrib/wvkbd-mobintl-landscape.jpg">landscape screenshot</a>) ·
+  <a href="https://git.sr.ht/~kennylevinsen/gtkgreet">gtkgreet</a> (the login box) ·
+  <a href="https://github.com/rharish101/ReGreet">ReGreet</a> (a prettier drop-in alternative for the login box).
+  Keyboard layout approximates <code>wvkbd-mobintl</code> landscape; gtkgreet shown with <code>GTK_THEME=Adwaita:dark</code>.
+</div>
+
+<script>
+// wvkbd-mobintl landscape layout (approximate)
+const rows = [
+  [
+    {k:'Esc', cls:'mod'}, {k:'q'},{k:'w'},{k:'e'},{k:'r'},{k:'t'},{k:'y'},{k:'u'},{k:'i'},{k:'o'},{k:'p'},
+    {k:'Tab', cls:'mod'}
+  ],
+  [
+    {k:'↑', cls:'mod'}, {k:'↓', cls:'mod'},
+    {k:'a'},{k:'s'},{k:'d'},{k:'f'},{k:'g'},{k:'h'},{k:'j'},{k:'k'},{k:'l'},{k:'\''},{k:'/'},
+    {k:'PgUp', cls:'mod'}
+  ],
+  [
+    {k:'←', cls:'mod'}, {k:'→', cls:'mod'}, {k:'⇧', id:'shift', cls:'mod'},
+    {k:'z'},{k:'x'},{k:'c'},{k:'v'},{k:'b'},{k:'n'},{k:'m'},{k:'-'},{k:'='},
+    {k:'⌫', id:'bksp', cls:'mod'}
+  ],
+  [
+    {k:'⌨', cls:'mod'}, {k:'Cmp', cls:'mod'}, {k:'Ctl', cls:'mod'}, {k:'Alt', cls:'mod'},
+    {k:'Space', id:'space', cls:'wide'},
+    {k:','},{k:'.'},{k:'⏎', id:'enter', cls:'mod wider'}
+  ]
+];
+
+const pw = document.getElementById('pw');
+const status = document.getElementById('status');
+const shiftKey = () => document.getElementById('shift');
+let buffer = [], shifted = false;
+
+function render() { pw.value = '•'.repeat(buffer.length); }
+
+document.querySelectorAll('.kb-row').forEach((rowEl, i) => {
+  rows[i].forEach(key => {
+    const el = document.createElement('div');
+    el.className = 'key' + (key.cls ? ' ' + key.cls : '');
+    if (key.id) el.id = key.id;
+    el.textContent = key.k;
+    el.addEventListener('pointerdown', () => tap(key, el));
+    rowEl.appendChild(el);
+  });
+});
+
+function tap(key, el) {
+  status.classList.remove('error');
+  if (key.id === 'bksp') { buffer.pop(); }
+  else if (key.id === 'space') { buffer.push(' '); }
+  else if (key.id === 'enter') { return submit(); }
+  else if (key.id === 'shift') {
+    shifted = !shifted;
+    el.classList.toggle('on', shifted);
+    return;
+  }
+  else if (key.k.length === 1) {
+    buffer.push(shifted ? key.k.toUpperCase() : key.k);
+    if (shifted) { shifted = false; shiftKey().classList.remove('on'); }
+  }
+  else { /* Esc/Tab/Cmp/Ctl/Alt/arrows: no-op in the mockup */ }
+  status.textContent = '';
+  render();
+}
+
+function submit() {
+  if (!buffer.length) {
+    status.textContent = 'press ⏎ again to log in';
+    return;
+  }
+  status.textContent = 'authenticating via PAM…';
+  setTimeout(() => {
+    status.textContent = '✓ starting session: niri';
+    buffer = []; render();
+  }, 700);
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+// osk-greeter · phase 2 — niri as greetd's greeter compositor
+// hosts osk-greeter: our custom client (CRT terminal UI + built-in touch OSK)
+// install path: /etc/greetd/niri-greeter.kdl
+
+prefer-no-csd true
+
+// the user session pins scale 1.0 on this panel explicitly; without this the
+// compositor's auto-pick doubles the scale and halves the logical viewport,
+// pushing the OSK deck off-screen
+output "eDP-1" {
+    scale 1.0
+}
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+layout {
+    background-color "#050a07"
+    focus-ring {
+        off
+    }
+    border {
+        off
+    }
+}
+
+// greeter hosts exactly one window; fullscreen it without caring about app-id
+window-rule {
+    open-fullscreen true
+}
+
+// watchdog: if osk-greeter dies unexpectedly, quit niri so greetd restarts
+// the greeter instead of showing a dead screen. on successful login greetd
+// tears the whole greeter session down itself.
+// NO_AT_BRIDGE / GTK_USE_PORTAL: keep GTK away from a11y/portal buses that
+// don't exist in the greeter session (they crash-looped without this).
+spawn-at-startup "sh" "-c" "NO_AT_BRIDGE=1 GTK_USE_PORTAL=0 osk-greeter; niri msg action quit --skip-confirmation"
+
+// ── rollback: phase 1 stack (regreet + wvkbd) ─────────────────────────
+// comment the spawn above, uncomment these two:
+// spawn-at-startup "wvkbd-mobintl"
+// spawn-at-startup "sh" "-c" "GTK_THEME=Adwaita:dark regreet; niri msg action quit --skip-confirmation"
