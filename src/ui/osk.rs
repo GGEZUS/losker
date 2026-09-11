@@ -182,6 +182,68 @@ impl Osk {
     }
 }
 
+/// Tab glyph — up when the deck is stowed ("tap to raise"), down when it is
+/// showing ("tap to stow").
+fn tab_glyph(shown: bool) -> &'static str {
+    if shown {
+        "▼"
+    } else {
+        "▲"
+    }
+}
+
+/// The deck in its bottom dock: a slide-up revealer that ALWAYS starts
+/// collapsed, plus the small toggle tab at the bottom center of the view.
+/// Neither view ever sprouts the deck uninvited — on the locker it would
+/// cover the art before it is needed, on the greeter it is simply noise.
+pub struct OskDock {
+    /// the tab; the view appends it above `dock`, centered on the width
+    pub tab: gtk4::Label,
+    /// slide-up revealer around the deck; collapsed natural size is 0
+    pub dock: gtk4::Revealer,
+    /// the raw deck, for allocation diagnostics
+    pub container: gtk4::Box,
+}
+
+impl OskDock {
+    pub fn new(on_event: impl Fn(OskEvent) + 'static) -> Self {
+        let osk = Osk::new(on_event);
+
+        let dock = gtk4::Revealer::new();
+        dock.set_transition_type(gtk4::RevealerTransitionType::SlideUp);
+        dock.set_transition_duration(220);
+        dock.set_reveal_child(false);
+        dock.set_child(Some(&osk.container));
+
+        let tab = gtk4::Label::new(Some(tab_glyph(false)));
+        tab.add_css_class("osk-tab");
+        // center on whatever width the column below the content offers
+        tab.set_hexpand(true);
+        tab.set_halign(gtk4::Align::Center);
+
+        // house idiom: gesture on a plain label, no GTK button theming.
+        // reveals_child() is the TARGET state, so re-taps mid-animation
+        // simply reverse course instead of fighting the transition.
+        let gesture = gtk4::GestureClick::new();
+        {
+            let dock_g = dock.clone();
+            let tab_g = tab.clone();
+            gesture.connect_pressed(move |_g, _n, _x, _y| {
+                let shown = !dock_g.reveals_child();
+                dock_g.set_reveal_child(shown);
+                tab_g.set_text(tab_glyph(shown));
+            });
+        }
+        tab.add_controller(gesture);
+
+        Self {
+            tab,
+            dock,
+            container: osk.container,
+        }
+    }
+}
+
 /// Rebuild the key layout for the current layer; also (re)size the area.
 fn relayout(state: &Rc<RefCell<DeckState>>, area: &gtk4::DrawingArea) {
     let (rows, total) = {
@@ -452,5 +514,11 @@ mod tests {
         let q = &rows[1][0]; // rows[0] is the number row
         assert_eq!(q.label, "Q");
         assert_eq!(q.action, KeyAction::Char('q'));
+    }
+
+    #[test]
+    fn tab_points_up_when_stowed_and_down_when_raised() {
+        assert_eq!(tab_glyph(false), "▲"); // deck hidden: raise it
+        assert_eq!(tab_glyph(true), "▼"); // deck showing: stow it
     }
 }

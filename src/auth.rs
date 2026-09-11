@@ -9,18 +9,25 @@ use std::time::Duration;
 
 /// Step-level trace for boot debugging — greetd gives the greeter a private
 /// /tmp, so this lives in the greeter-owned state dir where we can read it.
+/// The dir is owned by the `greeter` user, so `--lock` (running as the
+/// logged-in user) cannot write it — there the trace falls back to stderr,
+/// which the user-session journal captures.
 pub fn trace(msg: &str) {
     use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = format!("[{now:>12}] {msg}");
+    match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/var/lib/osk-greeter/trace.log")
+        .open("/var/lib/losker/trace.log")
     {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let _ = writeln!(f, "[{now:>12}] {msg}");
+        Ok(mut f) => {
+            let _ = writeln!(f, "{line}");
+        }
+        Err(_) => eprintln!("losker: {line}"),
     }
 }
 

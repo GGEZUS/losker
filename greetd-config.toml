@@ -1,4 +1,4 @@
-# osk-greeter · phase 1 — greetd config
+# losker · phase 1 — greetd config
 # install path: /etc/greetd/config.toml
 
 [terminal]

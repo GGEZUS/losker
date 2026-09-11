@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Preview the greeter's ASCII animation in a terminal — no reboot needed.
 
-Plays the exact frames file the greeter loads (/etc/greetd/osk-ascii.txt),
+Plays the exact frames file the greeter loads (/etc/greetd/losker-ascii.txt),
 with the same parsing rules and the same `# delay:` cadence, so what you
 see here is what spins on the greeter. Pure stdout — spawns nothing.
 
@@ -35,7 +35,7 @@ def parse_frames(text):
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else "/etc/greetd/osk-ascii.txt"
+    path = sys.argv[1] if len(sys.argv) > 1 else "/etc/greetd/losker-ascii.txt"
     try:
         text = open(path).read()
     except OSError as e:

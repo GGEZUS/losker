@@ -1,13 +1,39 @@
 //! CRT effects layer — scanlines + vignette pre-rendered once into a cached
 //! image (cheap blit), plus event-driven flashes (granted bloom, denied
 //! tear glitch). Click-through.
+//!
+//! Ambience (scanlines/vignette/bloom color) is parameterized by `CrtStyle`
+//! — `Default` is today's exact look. The denied-glitch stays red regardless:
+//! it is semantic feedback, not decor.
 
 use gtk4::{cairo, glib, prelude::*};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+/// Static CRT ambience, resolved from config by `ui::theme::crt_style`.
+#[derive(Debug, Clone, Copy)]
+pub struct CrtStyle {
+    /// dark scanline alpha (0 = none)
+    pub scanlines: f64,
+    /// outer vignette gradient alpha (0 = none)
+    pub vignette: f64,
+    /// granted-bloom flash color (alpha stays 0.28 * f)
+    pub bloom: (f64, f64, f64),
+}
+
+impl Default for CrtStyle {
+    fn default() -> Self {
+        Self {
+            scanlines: 0.22,
+            vignette: 0.55,
+            bloom: (0.84, 1.0, 0.90),
+        }
+    }
+}
+
 pub struct CrtEffects {
     area: gtk4::DrawingArea,
+    style: CrtStyle,
     flash: Cell<f64>,
     tear: Cell<u32>,
     cache: RefCell<Option<cairo::ImageSurface>>,
@@ -16,11 +42,16 @@ pub struct CrtEffects {
 
 impl CrtEffects {
     pub fn new() -> Rc<Self> {
+        Self::new_with(CrtStyle::default())
+    }
+
+    pub fn new_with(style: CrtStyle) -> Rc<Self> {
         let area = gtk4::DrawingArea::new();
         area.set_can_target(false); // click-through: purely visual
 
         let this = Rc::new(Self {
             area,
+            style,
             flash: Cell::new(0.0),
             tear: Cell::new(0),
             cache: RefCell::new(None),
@@ -78,9 +109,12 @@ impl CrtEffects {
     }
 
     fn draw(&self, cr: &cairo::Context, w: i32, h: i32) {
-        // (re)build the static scanline+vignette image only on size change
-        if self.cached_size.get() != (w, h) || self.cache.borrow().is_none() {
-            let img = render_static(w, h);
+        // (re)build the static scanline+vignette image only on size change;
+        // both ambience levels off → nothing static to paint
+        if (self.style.scanlines > 0.0 || self.style.vignette > 0.0)
+            && (self.cached_size.get() != (w, h) || self.cache.borrow().is_none())
+        {
+            let img = render_static(w, h, &self.style);
             *self.cache.borrow_mut() = Some(img);
             self.cached_size.set((w, h));
         }
@@ -106,7 +140,8 @@ impl CrtEffects {
         // granted: phosphor bloom flash
         let f = self.flash.get();
         if f > 0.0 {
-            cr.set_source_rgba(0.84, 1.0, 0.90, 0.28 * f);
+            let (r, g, b) = self.style.bloom;
+            cr.set_source_rgba(r, g, b, 0.28 * f);
             cr.rectangle(0.0, 0.0, w as f64, h as f64);
             cr.fill().unwrap();
         }
@@ -114,33 +149,37 @@ impl CrtEffects {
 }
 
 /// The expensive part, done once per size: vignette gradient + scanlines.
-fn render_static(w: i32, h: i32) -> cairo::ImageSurface {
+fn render_static(w: i32, h: i32, style: &CrtStyle) -> cairo::ImageSurface {
     let img = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).expect("surface");
     let cr = cairo::Context::new(&img).expect("context");
 
     // vignette: darker toward the edges, like CRT glass
-    let pat = cairo::RadialGradient::new(
-        w as f64 * 0.5,
-        h as f64 * 0.45,
-        w as f64 * 0.28,
-        w as f64 * 0.5,
-        h as f64 * 0.45,
-        w as f64 * 0.85,
-    );
-    pat.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0);
-    pat.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, 0.55);
-    cr.set_source(&pat).unwrap();
-    cr.rectangle(0.0, 0.0, w as f64, h as f64);
-    cr.fill().unwrap();
+    if style.vignette > 0.0 {
+        let pat = cairo::RadialGradient::new(
+            w as f64 * 0.5,
+            h as f64 * 0.45,
+            w as f64 * 0.28,
+            w as f64 * 0.5,
+            h as f64 * 0.45,
+            w as f64 * 0.85,
+        );
+        pat.add_color_stop_rgba(0.0, 0.0, 0.0, 0.0, 0.0);
+        pat.add_color_stop_rgba(1.0, 0.0, 0.0, 0.0, style.vignette);
+        cr.set_source(&pat).unwrap();
+        cr.rectangle(0.0, 0.0, w as f64, h as f64);
+        cr.fill().unwrap();
+    }
 
     // scanlines: 1 dark px every 3px
-    cr.set_source_rgba(0.0, 0.0, 0.0, 0.22);
-    let mut y = 2.0;
-    while y < h as f64 {
-        cr.rectangle(0.0, y, w as f64, 1.0);
-        y += 3.0;
+    if style.scanlines > 0.0 {
+        cr.set_source_rgba(0.0, 0.0, 0.0, style.scanlines);
+        let mut y = 2.0;
+        while y < h as f64 {
+            cr.rectangle(0.0, y, w as f64, 1.0);
+            y += 3.0;
+        }
+        cr.fill().unwrap();
     }
-    cr.fill().unwrap();
 
     img
 }

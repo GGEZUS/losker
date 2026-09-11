@@ -161,7 +161,7 @@ mod tests {
     impl MockGreetd {
         fn spawn(fail_first: bool) -> Self {
             let path = std::env::temp_dir().join(format!(
-                "osk-greeter-test-{}-{:?}.sock",
+                "losker-test-{}-{:?}.sock",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn missing_socket_is_a_clean_error() {
-        std::env::set_var("GREETD_SOCK", "/nonexistent/osk-greeter-test.sock");
+        std::env::set_var("GREETD_SOCK", "/nonexistent/losker-test.sock");
         let err = GreetdClient::connect().unwrap_err();
         assert!(matches!(err, IpcError::Io(_)), "got {err:?}");
     }

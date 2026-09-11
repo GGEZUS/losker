@@ -1,7 +1,7 @@
-//! PAM authentication for the in-session lock screen (`osk-greeter --lock`).
+//! PAM authentication for the in-session lock screen (`losker --lock`).
 //!
 //! The lock runs as the logged-in user, so there is no greetd socket —
-//! authentication goes straight to PAM (service "osk-greeter"), the same
+//! authentication goes straight to PAM (service "losker"), the same
 //! route swaylock takes. pam_unix verifies the user's OWN password through
 //! the suid-root unix_chkpwd helper, so no privileges are required and
 //! other users' passwords are refused by the helper itself.
@@ -19,7 +19,11 @@ const PAM_SUCCESS: c_int = 0;
 /// "Password:" — the only prompt style a lock screen ever answers
 const PAM_PROMPT_ECHO_OFF: c_int = 1;
 const PAM_BUF_ERR: c_int = 5;
-const SERVICE: &str = "osk-greeter";
+const SERVICE: &str = "losker";
+/// the service file's machine path — the lock screen's preflight (refuse to
+/// lock rather than trap the user in PAM's deny-all `other` fallback) and
+/// the test canary both check it
+pub const SERVICE_FILE: &str = "/etc/pam.d/losker";
 
 #[repr(C)]
 struct PamMessage {
@@ -170,24 +174,30 @@ mod tests {
 
     #[test]
     fn pam_service_file_exists_and_is_not_empty() {
-        // a 0-byte /etc/pam.d/osk-greeter once shipped silently: PAM then
+        // a 0-byte /etc/pam.d/losker once shipped silently: PAM then
         // falls back to /etc/pam.d/other (pam_warn + deny-all) and EVERY
         // password fails with a perfectly misleading "Authentication
         // failure". This canary catches that deploy mistake.
-        let meta = std::fs::metadata("/etc/pam.d/osk-greeter")
-            .expect("/etc/pam.d/osk-greeter is missing — install it");
+        let meta = std::fs::metadata(SERVICE_FILE)
+            .expect("/etc/pam.d/losker is missing — install it");
         assert!(
             meta.len() > 0,
-            "/etc/pam.d/osk-greeter is EMPTY — reinstall it"
+            "/etc/pam.d/losker is EMPTY — reinstall it"
         );
     }
 
     #[test]
     fn wrong_password_is_never_granted() {
-        // real libpam against the real (own) account — a wrong password must
-        // come back as a failure, whatever the exact PAM error text is
-        let user = std::env::var("USER").unwrap_or_else(|_| "nobody".into());
-        let out = run_auth_sync(&user, "definitely-not-the-password-osk-test".into());
+        // real libpam, but NEVER against a real account. An earlier shape of
+        // this canary authenticated a wrong password as $USER — which
+        // pam_faillock (pulled in via `auth include login`, deny=3) counted
+        // against the developer's OWN account: three `cargo test` runs in a
+        // row meant a ten-minute lockout, and the next REAL unlock attempt
+        // bounced off it. A nonexistent user tallies harmlessly.
+        let out = run_auth_sync(
+            "losker-tally-canary",
+            "definitely-not-the-password-osk-test".into(),
+        );
         assert!(
             !matches!(out, Outcome::Granted),
             "wrong password returned {out:?}"

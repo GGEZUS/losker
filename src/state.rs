@@ -14,9 +14,9 @@ pub struct State {
 
 impl State {
     pub fn path() -> PathBuf {
-        std::env::var("OSK_GREETER_STATE")
+        std::env::var("LOSKER_STATE")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/var/lib/osk-greeter/state.toml"))
+            .unwrap_or_else(|_| PathBuf::from("/var/lib/losker/state.toml"))
     }
 
     pub fn load() -> Self {

@@ -1,14 +1,23 @@
 [package]
-name = "osk-greeter"
+name = "losker"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal-cyberpunk greeter + lock screen with built-in touch OSK"
 
 [[bin]]
-name = "osk-greeter"
+name = "losker"
 path = "src/main.rs"
 
 [dependencies]
-gtk4 = "0.10"
+# v4_14: Display::monitors() list model (the per-index getter is gone from
+# these bindings) — the --demo-l preview uses it to find the primary monitor
+gtk4 = { version = "0.11", features = ["v4_14"] }
+# real session locking: gir wrapper over the ext-session-lock-v1 API in the
+# gtk4-layer-shell C library (>= 1.2 required, no default feature — v1_2 is
+# what exports Instance::connect_monitor)
+gtk4-session-lock = { version = "0.4", features = ["v1_2"] }
+# the `--config` TUI (owns the terminal; never touches gtk)
+ratatui = "0.30"
+crossterm = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

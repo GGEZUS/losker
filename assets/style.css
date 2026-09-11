@@ -1,17 +1,24 @@
-/* osk-greeter — phosphor/1 terminal theme
+/* losker — phosphor/1 terminal theme
    NOTE: font-family is set explicitly on every text class — the greeter
-   context has broken/absent settings daemons and inheritance proved flaky. */
+   context has broken/absent settings daemons and inheritance proved flaky.
+
+   Colors are @tokens defined by src/ui/theme.rs (token_block), which is
+   generated per config (accent) and prepended to this sheet. Never add a
+   second @define-color for an existing token: GTK's winner on duplicate
+   names is unspecified. Deny-red and the OSK cap-gray stay literal on
+   purpose — deny is semantic, the deck is a mechanical object, neither is
+   phosphor. */
 
 root,
 window.root {
-  background-color: #050a07;
-  color: #2bd96b;
+  background-color: @crt_black;
+  color: @phos;
   font-family: "DejaVu Sans Mono", monospace;
 }
 
 /* ── status line ─────────────────────────────────────── */
 .statusline {
-  color: #1a8f4c;
+  color: @phos_dim;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 15px;
   letter-spacing: 2px;
@@ -20,31 +27,43 @@ window.root {
 
 /* ── boot log ────────────────────────────────────────── */
 .bootlog {
-  color: #1a8f4c;
+  color: @phos_dim;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 15px;
-  text-shadow: 0 0 5px alpha(#2bd96b, 0.30);
+  text-shadow: 0 0 5px alpha(@phos, 0.30);
 }
 
 /* ── login block ─────────────────────────────────────── */
 .banner {
-  color: #49ff88;
+  color: @phos_hi;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 42px;
   font-weight: 700;
   letter-spacing: 14px;
-  text-shadow: 0 0 8px alpha(#49ff88, 0.75), 0 0 26px alpha(#49ff88, 0.35);
+  text-shadow: 0 0 8px alpha(@phos_hi, 0.75), 0 0 26px alpha(@phos_hi, 0.35);
   margin-bottom: 4px;
 }
 .banner-sub {
-  color: #1a8f4c;
+  color: @phos_dim;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 14px;
   letter-spacing: 5px;
   margin-bottom: 22px;
 }
+/* lock view: the heading steps aside for the art — one quiet line.
+   letter-spacing 6 (not 8) so the greeter's 22-char heading fits the
+   narrow 420px form */
+.banner-sm {
+  color: @phos_hi;
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 6px;
+  text-shadow: 0 0 8px alpha(@phos_hi, 0.55);
+  margin-bottom: 4px;
+}
 .authmsg {
-  color: #49ff88;
+  color: @phos_hi;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 16px;
   letter-spacing: 1px;
@@ -52,39 +71,39 @@ window.root {
   min-height: 22px;
 }
 .authmsg.err {
-  color: #ff4d5e;
+  color: #ff4d5e; /* deny red — semantic, never themed */
   text-shadow: 0 0 10px alpha(#ff4d5e, 0.6);
 }
 
 .frow {
-  border-bottom: 1px solid #0f4d2a;
+  border-bottom: 1px solid @phos_faint;
   padding-bottom: 6px;
   margin-top: 14px;
 }
 .frow-label {
-  color: #15703f;
+  color: @phos_label;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 18px;
   letter-spacing: 1px;
 }
 .frow-val {
-  color: #2bd96b;
+  color: @phos;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 18px;
-  text-shadow: 0 0 6px alpha(#2bd96b, 0.5);
+  text-shadow: 0 0 6px alpha(@phos, 0.5);
 }
 .frow-val.dim {
-  color: #1a8f4c;
+  color: @phos_dim;
 }
 .cursor {
-  color: #49ff88;
+  color: @phos_hi;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 18px;
-  text-shadow: 0 0 10px alpha(#49ff88, 0.9);
+  text-shadow: 0 0 10px alpha(@phos_hi, 0.9);
 }
 
 .hint {
-  color: #11633a;
+  color: @deep;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 14px;
   letter-spacing: 2px;
@@ -93,13 +112,27 @@ window.root {
 /* ── power actions (clickable labels) ─────────────────── */
 .pwr {
   background: transparent;
-  border: 1px solid #0f4d2a;
+  border: 1px solid @phos_faint;
   border-radius: 0;
-  color: #1a8f4c;
+  color: @phos_dim;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 14px;
   letter-spacing: 2px;
   padding: 8px 14px;
+}
+
+/* ── OSK dock tab — bottom center; raises/stows the deck ──────────────── */
+/* small glyph, generous min box: a touch target, not a button. NOTE:
+   CSS padding is ignored on these labels by this GTK build (font-size,
+   color, min-* all apply) — the touch target is min-*, not padding. */
+.osk-tab {
+  color: @phos_dim;
+  font-family: "DejaVu Sans Mono", monospace;
+  font-size: 16px;
+  text-shadow: 0 0 8px alpha(@phos, 0.45);
+  min-width: 132px;
+  min-height: 38px;
+  margin-top: 4px;
 }
 
 /* ── OSK deck — keycaps are drawn in cairo (ui/osk.rs), not CSS.
@@ -108,18 +141,24 @@ window.root {
   margin-top: 14px;
 }
 .osk-cap {
-  color: #6a6155;
+  color: #6a6155; /* deck cap-gray — mechanical object, never themed */
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 12px;
   letter-spacing: 4px;
 }
 
 /* ── ascii-art slot (right side) ──────────────────────── */
-/* sized so the 50-col arch frames fill the ~842px column */
+/* sized so the 50-col arch frames fill the ~842px column; narrower
+   canvases get a per-label pango size override at runtime (ui/ascii.rs) */
 .ascii-art {
-  color: #1a8f4c;
+  color: @phos_dim;
   font-family: "DejaVu Sans Mono", monospace;
   font-size: 27px;
   line-height: 1.15;
-  text-shadow: 0 0 8px alpha(#2bd96b, 0.35);
+  text-shadow: 0 0 8px alpha(@phos, 0.35);
+}
+/* lock view hero: same art, tighter leading — packs more rows into the
+   slot the OSK leaves (leading baked into HERO_LINE_F in ui/ascii.rs) */
+.ascii-hero {
+  line-height: 1.05;
 }

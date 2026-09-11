@@ -3,12 +3,15 @@
 
 pub mod ascii;
 pub mod crt;
+pub mod lock;
 pub mod osk;
+pub mod theme;
 pub mod theater;
 
 use crate::auth::{Auth, Outcome};
 use crate::sessions::{self, Session};
 use crate::state::{self, State};
+use gtk4::gdk;
 use gtk4::glib;
 use gtk4::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -18,25 +21,81 @@ use std::rc::Rc;
 pub enum Mode {
     Greeter,
     Demo,
-    Lock,
+}
+
+/// First monitor of the default display. Both views fullscreen on it (the
+/// boot greeter via niri's `open-fullscreen` rule, the demos explicitly),
+/// so monitor geometry == window geometry wherever the art budget matters.
+pub(crate) fn primary_monitor() -> Option<gdk::Monitor> {
+    gdk::Display::default()
+        .and_then(|d| d.monitors().item(0))
+        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+}
+
+/// Height of the art column, in px: the content area minus the dock tab's
+/// band. The column is top-anchored with the art centered inside it, so the
+/// logo's bottom edge stays clear of the arrow in every dock state — the
+/// deck may overlay the logo, the arrow's territory is off limits.
+/// Measured chrome: status line ~20, dock tab 38 + 4 margin, bottom margin 16.
+pub(crate) fn art_box_height(monitor: &gdk::Monitor) -> i32 {
+    let geo = monitor.geometry();
+    (geo.height() - 16 - 20 - 42).max(240)
+}
+
+/// gdk shim over the pure fit box (see [`ascii::art_budget_for`])
+pub(crate) fn art_budget(monitor: &gdk::Monitor, size: crate::config::LogoSize) -> (i32, i32) {
+    let geo = monitor.geometry();
+    ascii::art_budget_for((geo.width(), geo.height()), size)
 }
 
 pub fn run(mode: Mode) -> i32 {
-    // greeter panics are invisible (stderr not captured) — name them in the
-    // trace so a crash names its own site instead of just reloading
-    std::panic::set_hook(Box::new(|info| {
-        crate::auth::trace(&format!("PANIC: {info}"));
-    }));
+    install_panic_hook();
+    let cfg = crate::config::load();
+    crate::auth::trace(&format!(
+        "config: osk={} logo={:?} accent={:?} crt={:?}",
+        cfg.osk,
+        cfg.logo,
+        cfg.accent.map(|c| c.to_hex()),
+        cfg.crt
+    ));
     // Plain gtk init — no GtkApplication: the greeter context has no sane
     // session bus, and Application registration drags in portals/unique-app
     // machinery that crash-loops there (observed in the greetd journal).
     if gtk4::init().is_err() {
-        eprintln!("osk-greeter: gtk init failed (no display?)");
+        eprintln!("losker: gtk init failed (no display?)");
         return 2;
     }
-    build(mode);
+    ensure_css(&cfg);
+    build(mode, &cfg);
     glib::MainLoop::new(None, false).run();
     0
+}
+
+/// greeter panics are invisible (stderr not captured) — name them in the
+/// trace so a crash names its own site instead of just reloading
+pub(crate) fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        crate::auth::trace(&format!("PANIC: {info}"));
+    }));
+}
+
+/// one application CSS provider for the display — call right after gtk init,
+/// before any window exists. The sheet is theme tokens + rules (ui::theme).
+pub(crate) fn ensure_css(cfg: &crate::config::Config) {
+    let provider = gtk4::CssProvider::new();
+    // GTK skips past bad rules silently — a partial sheet reads as "the
+    // theme broke randomly". Say exactly where each failure landed.
+    provider.connect_parsing_error(|_p, section, err| {
+        let at = section.start_location().lines() + 1;
+        eprintln!("losker: css parse error at line {at}: {err}");
+        crate::auth::trace(&format!("css: parse error at line {at}: {err}"));
+    });
+    provider.load_from_data(&theme::css(cfg));
+    gtk4::style_context_add_provider_for_display(
+        &gtk4::gdk::Display::default().expect("no display"),
+        &provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -48,9 +107,6 @@ enum Stage {
 }
 
 struct Ui {
-    /// in-session lock screen: PAM auth instead of the greetd handshake,
-    /// no session picker, no power actions
-    lock: bool,
     buffer: RefCell<String>,
     busy: Cell<bool>,
     stage: Cell<Stage>,
@@ -70,29 +126,22 @@ struct Ui {
     st: State,
 }
 
-fn build(mode: Mode) {
+fn build(mode: Mode, cfg: &crate::config::Config) {
     let demo = matches!(mode, Mode::Demo);
-    let lock = matches!(mode, Mode::Lock);
     crate::auth::trace(&format!(
-        "ui: starting (demo={demo} lock={lock}) pid={} user={:?}",
+        "ui: starting (demo={demo}) pid={} user={:?}",
         std::process::id(),
         std::env::var("USER").ok()
     ));
-    let provider = gtk4::CssProvider::new();
-    provider.load_from_data(include_str!("../../assets/style.css"));
-    gtk4::style_context_add_provider_for_display(
-        &gtk4::gdk::Display::default().expect("no display"),
-        &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-    );
 
     let window = gtk4::Window::new();
     window.add_css_class("root");
-    // "osk-lock" is the title the niri session window-rule matches on
-    window.set_title(Some(if lock { "osk-lock" } else { "osk-greeter" }));
+    window.set_title(Some("losker"));
     window.set_default_size(1440, 960);
 
     // ── root: overlay so the CRT layer paints over everything ──────────
+    // (the effects layer is added as an overlay child LATER, after the OSK
+    // dock, so the dock sits under the scanlines)
     let overlay = gtk4::Overlay::new();
     let main = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     // no top margin: the log starts at the true top of the screen
@@ -102,8 +151,7 @@ fn build(mode: Mode) {
     main.set_margin_end(34);
     overlay.set_child(Some(&main));
 
-    let effects = crt::CrtEffects::new();
-    overlay.add_overlay(effects.widget());
+    let effects = crt::CrtEffects::new_with(theme::crt_style(cfg));
 
     // ── status line (top right) ────────────────────────────────────────
     let top = gtk4::Box::new(gtk4::Orientation::Horizontal, 0);
@@ -126,12 +174,23 @@ fn build(mode: Mode) {
     let left = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     content.append(&left);
 
-    let art = ascii::spin_label();
-    let art_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
-    art_box.set_hexpand(true);
-    art_box.set_valign(gtk4::Align::Center);
-    art_box.append(&art);
-    content.append(&art_box);
+    // art slot — config can hide it entirely (logo = none). CENTERED
+    // vertically, whatever the size: a small logo must not pin to the top
+    // and strand black space below. The safe zone is enforced by the fit
+    // budget (it ends above the dock tab), not by pinning the position.
+    let mut art_lbl: Option<gtk4::Label> = None;
+    let art = match primary_monitor() {
+        Some(m) => ascii::spin_label_sized(cfg, Some(art_budget(&m, cfg.logo_size))),
+        None => ascii::spin_label(cfg),
+    };
+    if let Some(art) = art {
+        let art_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        art_box.set_hexpand(true);
+        art_box.set_valign(gtk4::Align::Center);
+        art_box.append(&art);
+        content.append(&art_box);
+        art_lbl = Some(art);
+    }
 
     // ── boot log / fixed stats panel ───────────────────────────────────
     let boot_label = gtk4::Label::new(None);
@@ -152,17 +211,7 @@ fn build(mode: Mode) {
 
     // ── persistent state + sessions ────────────────────────────────────
     let st = State::load();
-    // lock authenticates whoever is running it ($USER); unix_chkpwd would
-    // refuse any other account anyway
-    let username = if lock {
-        std::env::var("USER")
-            .ok()
-            .filter(|u| !u.is_empty())
-            .or_else(|| st.last_user.clone())
-            .unwrap_or_else(|| "rbc".into())
-    } else {
-        st.last_user.clone().unwrap_or_else(|| "rbc".into())
-    };
+    let username = st.last_user.clone().unwrap_or_else(|| "rbc".into());
     let sess_list = sessions::list();
     let session_idx = Cell::new(0);
     if let Some(saved) = &st.last_session {
@@ -178,19 +227,16 @@ fn build(mode: Mode) {
             cmd: state::DEFAULT_SESSION.into(),
         });
 
-    // ── login block ────────────────────────────────────────────────────
+    // ── login block — deliberately compact: the art is the show; the form
+    // is a means to an end (no username is 560px wide) ───────────────────
     let login = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
     login.set_vexpand(true);
     login.set_valign(gtk4::Align::Center);
     login.set_halign(gtk4::Align::Start);
-    login.set_size_request(760, -1);
+    login.set_size_request(420, -1);
 
-    let banner = gtk4::Label::new(Some(if lock {
-        "TERMINAL LOCKED"
-    } else {
-        "AUTHORIZATION REQUIRED"
-    }));
-    banner.add_css_class("banner");
+    let banner = gtk4::Label::new(Some("AUTHORIZATION REQUIRED"));
+    banner.add_css_class("banner-sm");
     let sub = gtk4::Label::new(Some("RESTRICTED TERMINAL // PHOSPHOR/1"));
     sub.add_css_class("banner-sub");
     sub.set_halign(gtk4::Align::Start);
@@ -232,13 +278,8 @@ fn build(mode: Mode) {
     let poweroff = power_label("[ POWEROFF ]");
     pwr_box.append(&reboot);
     pwr_box.append(&poweroff);
-    let hint = gtk4::Label::new(Some("RET AUTHENTICATES"));
-    hint.add_css_class("hint");
-    hint.set_hexpand(true);
-    hint.set_halign(gtk4::Align::End);
     meta.set_margin_top(18);
     meta.append(&pwr_box);
-    meta.append(&hint);
 
     login.append(&banner);
     login.append(&sub);
@@ -249,18 +290,9 @@ fn build(mode: Mode) {
     login.append(&meta);
     left.append(&login);
 
-    if lock {
-        // a lock screen offers one path out: the password. No session
-        // picker (the session is already running), no reboot shortcut.
-        session_row.set_visible(false);
-        reboot.set_visible(false);
-        poweroff.set_visible(false);
-    }
-
     // ── the shared UI state ────────────────────────────────────────────
     let (tx, rx) = std::sync::mpsc::channel::<Outcome>();
     let ui = Rc::new(Ui {
-        lock,
         buffer: RefCell::new(String::new()),
         busy: Cell::new(false),
         stage: Cell::new(Stage::Fresh),
@@ -269,7 +301,9 @@ fn build(mode: Mode) {
         pw_dots,
         authmsg,
         boot,
-        effects,
+        // cloned: the CRT layer is also added as an overlay child further
+        // down (after the OSK dock, so the dock paints under the scanlines)
+        effects: effects.clone(),
         auth: Auth::new(demo),
         username,
         sessions: RefCell::new(sess_list),
@@ -295,26 +329,6 @@ fn build(mode: Mode) {
         let ui = ui.clone();
         move || {
             if ui.busy.get() {
-                return;
-            }
-
-            // lock mode: single phase, straight to PAM — no greetd out here
-            if ui.lock {
-                if ui.buffer.borrow().is_empty() {
-                    set_msg(&ui, "type the password first", false);
-                    return;
-                }
-                ui.busy.set(true);
-                set_msg(&ui, "verifying credentials …", false);
-                let pw = ui.buffer.borrow().clone();
-                ui.buffer.borrow_mut().clear();
-                ui.pw_dots.set_text("");
-                crate::auth::trace("ui: lock submit → PAM");
-                crate::pam::authenticate(
-                    ui.username.clone(),
-                    pw,
-                    ui.tx.lock().unwrap().clone(),
-                );
                 return;
             }
 
@@ -356,26 +370,43 @@ fn build(mode: Mode) {
         }
     };
 
-    // ── OSK ────────────────────────────────────────────────────────────
-    let osk = {
-        let ui = ui.clone();
-        let submit = submit.clone();
-        Rc::new(osk::Osk::new(move |ev| {
-            match ev {
-                osk::OskEvent::Char(c) => ui.buffer.borrow_mut().push(c),
-                osk::OskEvent::Backspace => {
-                    ui.buffer.borrow_mut().pop();
+    // ── OSK dock (config can drop the deck on keyboard-equipped machines).
+    // The deck NEVER shows uninvited: it starts stowed and the ▲ tab at the
+    // bottom center raises it. Tab + deck live in a bottom-anchored OVERLAY
+    // child — raising the deck takes no layout space, so the art and the
+    // form stay exactly where they are and the keyboard slides over them.
+    let osk_dock: Option<osk::OskDock> = if cfg.osk {
+        let dock = {
+            let ui = ui.clone();
+            let submit = submit.clone();
+            osk::OskDock::new(move |ev| {
+                match ev {
+                    osk::OskEvent::Char(c) => ui.buffer.borrow_mut().push(c),
+                    osk::OskEvent::Backspace => {
+                        ui.buffer.borrow_mut().pop();
+                    }
+                    osk::OskEvent::Enter => return submit(),
                 }
-                osk::OskEvent::Enter => return submit(),
-            }
-            let dots = "•".repeat(ui.buffer.borrow().len());
-            ui.pw_dots.set_text(&dots);
-        }))
+                let dots = "•".repeat(ui.buffer.borrow().len());
+                ui.pw_dots.set_text(&dots);
+            })
+        };
+        let dock_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
+        dock_box.set_valign(gtk4::Align::End);
+        dock_box.set_halign(gtk4::Align::Center); // deck-width footprint, not
+        // full-width: an overlay box wider than its content would swallow
+        // clicks aimed at the UI beneath it
+        dock_box.set_margin_bottom(16); // same floor as the main box
+        dock_box.append(&dock.tab);
+        dock_box.append(&dock.dock);
+        overlay.add_overlay(&dock_box);
+        Some(dock)
+    } else {
+        None
     };
-    osk.container.set_margin_top(14);
-    // full window width → the deck centers on the screen, as before the
-    // art column existed
-    main.append(&osk.container);
+    // the CRT layer goes in LAST among the overlay children so it paints
+    // over the dock as well — the deck stays part of the phosphor picture
+    overlay.add_overlay(effects.widget());
 
     // ── physical keyboard feeds the same buffer ────────────────────────
     {
@@ -442,12 +473,19 @@ fn build(mode: Mode) {
 
     window.set_child(Some(&overlay));
     window.present();
+    // demo: fullscreen like the boot greeter's `open-fullscreen` rule —
+    // the layout is budgeted and judged at monitor size, so the preview
+    // must be too (plain windows open at natural size and clip the deck)
+    if demo {
+        window.fullscreen();
+    }
 
     // allocation diagnostics — the greeter's /tmp is a private namespace
     // (greetd PrivateTmp), so this goes to the greeter-owned state dir
     {
         let win = window.clone();
-        let osk_c = osk.container.clone();
+        let dock_c = osk_dock.map(|d| (d.container, d.dock, d.tab));
+        let art_c = art_lbl;
         glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
             let rss = std::fs::read_to_string("/proc/self/status")
                 .ok()
@@ -457,13 +495,31 @@ fn build(mode: Mode) {
                         .map(|l| l.split_whitespace().nth(1).unwrap_or("?").to_string())
                 })
                 .unwrap_or_else(|| "?".into());
+            let osk_dim = dock_c
+                .as_ref()
+                .map(|(c, _, _)| format!("{}x{}", c.width(), c.height()))
+                .unwrap_or_else(|| "disabled".into());
+            let tab_dim = dock_c
+                .as_ref()
+                .map(|(_, _, t)| format!("{}x{}", t.width(), t.height()))
+                .unwrap_or_else(|| "none".into());
+            let deck = match &dock_c {
+                None => "disabled".to_string(),
+                Some((_, d, _)) if d.reveals_child() => "shown".to_string(),
+                Some(_) => "stowed".to_string(),
+            };
+            let art_dim = art_c
+                .as_ref()
+                .map(|l| {
+                    let nat_h = l.measure(gtk4::Orientation::Vertical, -1).1;
+                    format!("{}x{} (nat h {nat_h})", l.width(), l.height())
+                })
+                .unwrap_or_else(|| "hidden".into());
             crate::auth::trace(&format!(
-                "alloc window={}x{} scale={} osk={}x{} rss={}kB",
+                "alloc window={}x{} scale={} art={art_dim} osk={osk_dim} tab={tab_dim} deck={deck} rss={}kB",
                 win.width(),
                 win.height(),
                 win.scale_factor(),
-                osk_c.width(),
-                osk_c.height(),
                 rss
             ));
         });
@@ -498,15 +554,6 @@ fn handle_outcome(ui: &Rc<Ui>, outcome: Outcome) {
             }
         }
         Outcome::Granted => {
-            if ui.lock {
-                ui.effects.bloom();
-                set_msg(ui, "ACCESS RESTORED — welcome back, operator", false);
-                ui.boot.event("[  OK  ] authentication passed");
-                glib::timeout_add_local_once(std::time::Duration::from_millis(900), || {
-                    std::process::exit(0);
-                });
-                return;
-            }
             ui.effects.bloom();
             set_msg(ui, "ACCESS GRANTED — welcome, operator", false);
             ui.boot.event("[  OK  ] authentication passed");
@@ -522,7 +569,7 @@ fn handle_outcome(ui: &Rc<Ui>, outcome: Outcome) {
             st.last_user = Some(ui.username.clone());
             st.last_session = Some(cmd);
             if let Err(e) = st.save() {
-                eprintln!("osk-greeter: state save failed: {e}");
+                eprintln!("losker: state save failed: {e}");
             }
             ui.boot.event("[  OK  ] session starting …");
             glib::timeout_add_local_once(std::time::Duration::from_millis(900), || {
@@ -558,14 +605,14 @@ fn set_msg(ui: &Ui, text: &str, err: bool) {
     }
 }
 
-fn update_clock(status: &gtk4::Label) {
+pub(crate) fn update_clock(status: &gtk4::Label) {
     if let Ok(now) = glib::DateTime::now_local() {
         let text = format!("tty1 · surarch · {:02}:{:02}", now.hour(), now.minute());
         status.set_label(&text);
     }
 }
 
-fn frow(label: &str, value: &str, style: Option<&str>) -> gtk4::Box {
+pub(crate) fn frow(label: &str, value: &str, style: Option<&str>) -> gtk4::Box {
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 18);
     row.add_css_class("frow");
     let l = gtk4::Label::new(Some(label));
@@ -580,7 +627,7 @@ fn frow(label: &str, value: &str, style: Option<&str>) -> gtk4::Box {
     row
 }
 
-fn frow_password(label: &str) -> (gtk4::Box, gtk4::Label, gtk4::Label) {
+pub(crate) fn frow_password(label: &str) -> (gtk4::Box, gtk4::Label, gtk4::Label) {
     let row = gtk4::Box::new(gtk4::Orientation::Horizontal, 18);
     row.add_css_class("frow");
     let l = gtk4::Label::new(Some(label));
