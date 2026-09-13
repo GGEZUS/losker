@@ -196,6 +196,9 @@ fn build(mode: Mode, cfg: &crate::config::Config) {
     let boot_label = gtk4::Label::new(None);
     boot_label.set_valign(gtk4::Align::Start);
     boot_label.set_halign(gtk4::Align::Start);
+    // hidden for now (keeps its slot in the layout work): the theater and
+    // all boot.event() feeds stay live — flip this back to restore the log
+    boot_label.set_visible(false);
     left.append(&boot_label);
     let boot = Rc::new(theater::BootLog::new(boot_label));
     boot.start();
@@ -379,7 +382,7 @@ fn build(mode: Mode, cfg: &crate::config::Config) {
         let dock = {
             let ui = ui.clone();
             let submit = submit.clone();
-            osk::OskDock::new(move |ev| {
+            osk::OskDock::new(cfg.accent, move |ev| {
                 match ev {
                     osk::OskEvent::Char(c) => ui.buffer.borrow_mut().push(c),
                     osk::OskEvent::Backspace => {

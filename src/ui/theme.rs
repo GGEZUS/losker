@@ -83,7 +83,7 @@ pub fn token_block(accent: Option<HexColor>) -> String {
 }
 
 /// accent moved 30% toward white
-fn mix(c: HexColor, white: f64) -> (f64, f64, f64) {
+pub(crate) fn mix(c: HexColor, white: f64) -> (f64, f64, f64) {
     let (r, g, b) = c.rgb();
     (
         r * (1.0 - white) + white,
@@ -93,7 +93,7 @@ fn mix(c: HexColor, white: f64) -> (f64, f64, f64) {
 }
 
 /// accent scaled toward black
-fn scale(c: HexColor, f: f64) -> (f64, f64, f64) {
+pub(crate) fn scale(c: HexColor, f: f64) -> (f64, f64, f64) {
     let (r, g, b) = c.rgb();
     (r * f, g * f, b * f)
 }

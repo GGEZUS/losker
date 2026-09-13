@@ -135,16 +135,10 @@ window.root {
   margin-top: 4px;
 }
 
-/* ── OSK deck — keycaps are drawn in cairo (ui/osk.rs), not CSS.
-   Only the engraved chassis caption lives here. ─────────── */
+/* ── OSK deck — the whole deck (chassis + keycaps + legends + the shift
+   LED) is drawn in cairo (ui/osk.rs) from the accent, not CSS. ────────── */
 .osk {
   margin-top: 14px;
-}
-.osk-cap {
-  color: #6a6155; /* deck cap-gray — mechanical object, never themed */
-  font-family: "DejaVu Sans Mono", monospace;
-  font-size: 12px;
-  letter-spacing: 4px;
 }
 
 /* ── ascii-art slot (right side) ──────────────────────── */

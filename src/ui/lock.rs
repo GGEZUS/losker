@@ -481,6 +481,9 @@ fn build_lock_view(ui: &Rc<LockUi>, monitor: &gdk::Monitor) -> LockView {
     let boot_label = gtk4::Label::new(None);
     boot_label.set_valign(gtk4::Align::Start);
     boot_label.set_halign(gtk4::Align::Start);
+    // hidden for now (keeps its slot in the layout work): the theater and
+    // all boot.event() feeds stay live — flip this back to restore the log
+    boot_label.set_visible(false);
     left.append(&boot_label);
     let boot = Rc::new(theater::BootLog::new(boot_label));
     boot.start();
@@ -518,7 +521,7 @@ fn build_lock_view(ui: &Rc<LockUi>, monitor: &gdk::Monitor) -> LockView {
     let osk_dock: Option<osk::OskDock> = if ui.cfg.osk {
         let dock = {
             let ui = ui.clone();
-            osk::OskDock::new(move |ev| handle_osk_event(&ui, ev))
+            osk::OskDock::new(ui.cfg.accent, move |ev| handle_osk_event(&ui, ev))
         };
         let dock_box = gtk4::Box::new(gtk4::Orientation::Vertical, 0);
         dock_box.set_valign(gtk4::Align::End);
