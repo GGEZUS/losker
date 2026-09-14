@@ -3,6 +3,8 @@
 Terminal-cyberpunk **greetd greeter + real session locker** with a built-in
 touch OSK, written in Rust + GTK4. One binary, two roles:
 
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
+
 | invocation | role | auth |
 |---|---|---|
 | `losker` | greetd greeter (no keyboard at boot) | greetd IPC handshake |

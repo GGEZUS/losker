@@ -1,4 +1,4 @@
-# losker · phase 1 — greetd config
+# losker — greetd config
 # install path: /etc/greetd/config.toml
 
 [terminal]
@@ -6,9 +6,8 @@
 vt = 1
 
 [default_session]
-# niri (the tablet fork, same as the user session) hosting:
-#   gtkgreet — login UI (question-driven: username → PAM asks → password)
-#   wvkbd-mobintl — touch OSK, layer-shell docked at the bottom
-# see /etc/greetd/niri-greeter.kdl
+# niri as the greeter compositor, hosting losker (CRT login UI + built-in
+# touch OSK). see /etc/greetd/niri-greeter.kdl for the fullscreen rule and
+# the losker watchdog spawn line
 command = "niri -c /etc/greetd/niri-greeter.kdl"
 user = "greeter"
