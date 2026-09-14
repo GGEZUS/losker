@@ -143,12 +143,17 @@ pub fn run() -> i32 {
 
     let (tx, rx) = std::sync::mpsc::channel::<Outcome>();
     // authenticate whoever is running it ($USER); unix_chkpwd would refuse
-    // any other account anyway
+    // any other account anyway. No fallback literal: without a real account
+    // to verify there is nothing to unlock against, so refuse to lock.
     let username = std::env::var("USER")
         .ok()
         .filter(|u| !u.is_empty())
-        .or_else(|| crate::state::State::load().last_user)
-        .unwrap_or_else(|| "rbc".into());
+        .or_else(|| crate::state::State::load().last_user);
+    let Some(username) = username else {
+        crate::auth::trace("lock: no account to authenticate ($USER unset, no last-user state) — refusing to lock");
+        eprintln!("losker: no account to authenticate — refusing to lock");
+        return EXIT_NOT_ACQUIRED;
+    };
     crate::auth::trace(&format!("lock: starting pid={} user={username}", std::process::id()));
 
     let main_loop = glib::MainLoop::new(None, false);

@@ -214,7 +214,9 @@ fn build(mode: Mode, cfg: &crate::config::Config) {
 
     // ── persistent state + sessions ────────────────────────────────────
     let st = State::load();
-    let username = st.last_user.clone().unwrap_or_else(|| "rbc".into());
+    // last login wins; first boot derives the machine's single human user
+    // (see state::default_user — no guess when ambiguous: submit refuses)
+    let username = st.last_user.clone().or_else(state::default_user).unwrap_or_default();
     let sess_list = sessions::list();
     let session_idx = Cell::new(0);
     if let Some(saved) = &st.last_session {
@@ -344,6 +346,13 @@ fn build(mode: Mode, cfg: &crate::config::Config) {
 
             match ui.stage.get() {
                 Stage::Fresh => {
+                    if ui.username.is_empty() {
+                        // no state file and no resolvable human account; the
+                        // form has no username entry, so say so instead of
+                        // authenticating an empty name
+                        set_msg(&ui, "no login user on this machine", false);
+                        return;
+                    }
                     if ui.buffer.borrow().is_empty() {
                         set_msg(&ui, "type the password first", false);
                         return;
