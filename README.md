@@ -29,9 +29,16 @@ once, and press feedback that inverts the keycap. The deck starts stowed; a
 `▲` tab at the bottom center of the screen raises it, flipping to `▼` to
 stow it again. It never shows uninvited.
 
+**Tested on:** Arch-family (Arch, CachyOS) with niri + greetd, on a laptop
+and a keyboard-less touch tablet. Other distros, compositors and shells are
+untested; the wiki's
+[Installation](https://github.com/GGEZUS/losker/wiki/Installation#tested-scope-and-what-that-means-for-you)
+page lists what moves per distro. Beyond that, you are on your own.
+
 **Documentation lives on the
 [wiki](https://github.com/GGEZUS/losker/wiki)**: [Installation](https://github.com/GGEZUS/losker/wiki/Installation)
-(greetd + locker setup), [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration),
+(greetd + locker setup), [Noctalia](https://github.com/GGEZUS/losker/wiki/Noctalia)
+(desktop-shell coexistence), [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration),
 [OSK](https://github.com/GGEZUS/losker/wiki/OSK) (deck design),
 [Logos](https://github.com/GGEZUS/losker/wiki/Logos) (the spinning ASCII art
 pipeline), [Troubleshooting](https://github.com/GGEZUS/losker/wiki/Troubleshooting)
@@ -89,6 +96,22 @@ Mod+Shift+L hotkey-overlay-title="Lock Screen: losker" {
 
 `NO_AT_BRIDGE=1 GTK_USE_PORTAL=0`: keep GTK away from the a11y/portal buses,
 they crash-looped the greeter session, same risk in-session.
+
+## Desktop integration
+
+A machine tries to lock in two more places than the keybind; the tested
+answers (full copy-paste blocks on the wiki):
+
+- **Suspend**: a systemd sleep hook runs the same respawn loop detached, one
+  second before the machine sleeps
+  ([Installation: suspend locking](https://github.com/GGEZUS/losker/wiki/Installation#suspend-locking-systemd-sleep-hook)).
+- **noctalia**: if you run it, its own lock needs disabling in two places,
+  both in `~/.local/state/noctalia/settings.toml` (the json `lockOnSuspend`
+  key is dead). Verified against noctalia 5.0.1; details on the wiki's
+  [Noctalia](https://github.com/GGEZUS/losker/wiki/Noctalia) page.
+
+The rule underneath: exactly one thing may own locking. A different shell
+with lock features needs the same division.
 
 ## Configuration: `losker --config`
 
@@ -190,10 +213,11 @@ the screen. Without the wrapper, recovery is SSH or a VT.
   process could then unlock it.
 - **No tooltips/menus in lock views**: popups do not display while the
   screen is locked (gtk4-layer-shell limitation). The UI is labels + cairo.
-- Diagnostics: greeter traces to `/var/lib/losker/trace.log` (greetd's
-  PrivateTmp makes /tmp and stderr useless there). The lock runs as your
-  user and cannot write that dir, so its trace goes to stderr, the session
-  journal captures it.
+- Diagnostics: both roles trace to `/var/lib/losker/trace.log` when they can
+  write it (the greeter always can; the locker needs the append-right ACL
+  covered on the wiki). Otherwise the locker falls back to stderr, the
+  session journal captures it. greetd's PrivateTmp makes /tmp and the
+  greeter's stderr useless.
 - The old niri window-rule on title `osk-lock` is **dead**: lock surfaces
   are not regular windows. Remove the rule; it only masks bugs now.
 
