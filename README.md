@@ -38,7 +38,8 @@ page lists what moves per distro. Beyond that, you are on your own.
 **Documentation lives on the
 [wiki](https://github.com/GGEZUS/losker/wiki)**: [Installation](https://github.com/GGEZUS/losker/wiki/Installation)
 (greetd + locker setup), [Noctalia](https://github.com/GGEZUS/losker/wiki/Noctalia)
-(desktop-shell coexistence), [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration),
+(desktop-shell coexistence), [Updating](https://github.com/GGEZUS/losker/wiki/Updating)
+(what system updates can and cannot touch), [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration),
 [OSK](https://github.com/GGEZUS/losker/wiki/OSK) (deck design),
 [Logos](https://github.com/GGEZUS/losker/wiki/Logos) (the spinning ASCII art
 pipeline), [Troubleshooting](https://github.com/GGEZUS/losker/wiki/Troubleshooting)
