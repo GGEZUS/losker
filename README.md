@@ -1,9 +1,10 @@
 # losker
 
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
+[![Platform: Linux · Wayland](https://img.shields.io/badge/platform-Linux%20%C2%B7%20Wayland-lightgrey)](#requirements)
+
 Terminal-cyberpunk **greetd greeter + real session locker** with a built-in
 touch OSK, written in Rust + GTK4. One binary, two roles:
-
-[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
 
 | invocation | role | auth |
 |---|---|---|
@@ -14,20 +15,51 @@ touch OSK, written in Rust + GTK4. One binary, two roles:
 | `losker --config` | ratatui TUI for the look-and-feel config | — |
 | `losker --version` | version | — |
 
-`--lock` is a **real** locker: the compositor enforces that nothing renders
-above the lock surface, routes keyboard *and touch* into it, and kills its
-own keybinds while locked. It draws its own OSK inside the lock surface, so
-unlocking needs no physical keyboard. Requires a compositor that supports
-[ext-session-lock-v1](https://wayland.app/protocols/ext-session-lock-v1)
-(niri, sway, hyprland ≥ some version, …); on X11 or an unsupported
-compositor it refuses to lock and exits 1.
+## Why
 
-The OSK is drawn entirely in cairo, no GTK buttons: a typewriter-staggered
-QWERTY deck whose shift key latches into caps lock (a small LED on the cap
-shows the stuck state), a symbols layer covering every ASCII special exactly
-once, and press feedback that inverts the keycap. The deck starts stowed; a
-`▲` tab at the bottom center of the screen raises it, flipping to `▼` to
-stow it again. It never shows uninvited.
+This was built for machines you can log into **without a physical keyboard**.
+Both roles carry the same on-screen keyboard inside their surface, so a
+touch-only tablet can boot into a login screen it can actually type on — and
+lock/unlock a session later without a keyboard ever being attached.
+
+## Features
+
+- **Real locking, not a black overlay.** `--lock` goes through
+  [ext-session-lock-v1](https://wayland.app/protocols/ext-session-lock-v1):
+  the compositor enforces that nothing renders above the lock surface, routes
+  keyboard *and touch* into it, and kills its own keybinds while locked. On
+  X11 or an unsupported compositor it refuses to lock and exits 1.
+- **Unlockable by touch alone.** The OSK is drawn entirely in cairo (no GTK
+  buttons) *inside the lock surface*: a typewriter-staggered QWERTY deck whose
+  shift key latches into caps lock (a small LED on the cap shows the stuck
+  state), a symbols layer covering every ASCII special exactly once, and
+  press feedback that inverts the keycap. The deck starts stowed; a `▲` tab
+  at the bottom center raises it, flipping to `▼` to stow it again. It never
+  shows uninvited.
+- **The CRT look.** Scanlines and phosphor glow (`strong` / `subtle` / `off`),
+  a stock-phosphor-green accent you can recolor with one hex value, and a
+  spinning ASCII distro logo — ten distros pre-baked, three resolution tiers.
+- **One config TUI.** `losker --config` is a ratatui interface with a live
+  spinning preview. Hard rule: no config file → byte-identical UI (locked by
+  a unit test).
+- **Fails loud, not locked out.** The binary refuses to lock when
+  `/etc/pam.d/losker` is missing or empty (the PAM deny-all trap — see
+  [Install → Locker](#install)), and its exit codes are a documented contract
+  a respawn wrapper can key on.
+- **Safe to try anywhere.** Demo modes run the real UI with fake auth and
+  never lock anything.
+
+## Try it safely
+
+```bash
+losker --demo-g   # greeter shell, fake auth — runs anywhere
+losker --demo-l   # lock view preview — ESC closes, password "demo" grants
+```
+
+The full test matrix (real lock, conflict, crash takeover) is at the
+[bottom](#testing).
+
+## Tested scope
 
 **Tested on:** Arch-family (Arch, CachyOS) with niri + greetd, on a laptop
 and a keyboard-less touch tablet. Other distros, compositors and shells are
@@ -35,29 +67,28 @@ untested; the wiki's
 [Installation](https://github.com/GGEZUS/losker/wiki/Installation#tested-scope-and-what-that-means-for-you)
 page lists what moves per distro. Beyond that, you are on your own.
 
-**Documentation lives on the
-[wiki](https://github.com/GGEZUS/losker/wiki)**: [Installation](https://github.com/GGEZUS/losker/wiki/Installation)
-(greetd + locker setup), [Noctalia](https://github.com/GGEZUS/losker/wiki/Noctalia)
-(desktop-shell coexistence), [Updating](https://github.com/GGEZUS/losker/wiki/Updating)
-(what system updates can and cannot touch), [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration),
-[OSK](https://github.com/GGEZUS/losker/wiki/OSK) (deck design),
-[Logos](https://github.com/GGEZUS/losker/wiki/Logos) (the spinning ASCII art
-pipeline), [Troubleshooting](https://github.com/GGEZUS/losker/wiki/Troubleshooting)
-(known traps: PAM fallbacks, faillock lockouts, compositor quirks) and
-[Development](https://github.com/GGEZUS/losker/wiki/Development) (architecture,
-testing, exit codes).
+## Requirements
 
-## Build
+- Linux + Wayland. The greeter role needs [greetd](https://git.sr.ht/~kennylevinsen/greetd);
+  the locker needs a compositor that supports
+  [ext-session-lock-v1](https://wayland.app/protocols/ext-session-lock-v1)
+  (niri, sway, hyprland ≥ some version, …).
+- `gtk4` **≥ 4.14** — the bindings use 4.14 APIs (`Display::monitors()`)
+- `gtk4-layer-shell` **≥ 1.2** — the session-lock API (`pacman -S gtk4-layer-shell`)
+- `linux-pam` — plus the PAM service file below, or `--lock` refuses to start
+- `rustc ≥ 1.92`, cargo, `pkg-config`
+- optional: fastfetch + the vendored `fetch`, only for live logo generation
+  (see [Distro logos](#distro-logos))
+
+## Install
+
+### Build
 
 ```bash
 cargo build --release && cargo test
 ```
 
-Dependencies: `gtk4` (≥ 4.12), `gtk4-layer-shell` **≥ 1.2** (session-lock
-API; `pacman -S gtk4-layer-shell`), `linux-pam`, `rustc ≥ 1.92`,
-`pkg-config`.
-
-## Deploy (greeter)
+### Greeter (greetd)
 
 ```bash
 sudo -A cp target/release/losker /usr/local/bin/
@@ -72,7 +103,7 @@ traps (`NO_AT_BRIDGE=1 GTK_USE_PORTAL=0`, PrivateTmp diagnostics), is the
 wiki's [Installation](https://github.com/GGEZUS/losker/wiki/Installation)
 page.
 
-## Deploy (locker, any machine)
+### Locker (any machine)
 
 The lock authenticates `$USER` through PAM service `losker`:
 
@@ -87,7 +118,7 @@ refused, a permanent lockout. The binary therefore **refuses to lock**
 (exit 1) when the file is missing or empty, instead of locking you out.
 
 Wrap the keybind in a respawn supervisor keyed on exit codes (the exit-code
-table is at the bottom):
+table is [below](#exit-codes)):
 
 ```kdl
 Mod+Shift+L hotkey-overlay-title="Lock Screen: losker" {
@@ -98,7 +129,7 @@ Mod+Shift+L hotkey-overlay-title="Lock Screen: losker" {
 `NO_AT_BRIDGE=1 GTK_USE_PORTAL=0`: keep GTK away from the a11y/portal buses,
 they crash-looped the greeter session, same risk in-session.
 
-## Desktop integration
+### Desktop integration
 
 A machine tries to lock in two more places than the keybind; the tested
 answers (full copy-paste blocks on the wiki):
@@ -144,9 +175,7 @@ LOSKER_CONFIG=/tmp/cfg.toml losker --config
 ```
 
 Both the greeter and the locker read the config once at startup: edits
-apply at the next start, not live. The whole theming system is built around
-one hard rule, **no config file → byte-identical UI** (locked by a unit
-test).
+apply at the next start, not live.
 
 ## Distro logos
 
@@ -244,3 +273,29 @@ that fails auth as a real user strikes that user's faillock tally, and
 enough runs lock the real account. The
 [Development](https://github.com/GGEZUS/losker/wiki/Development) page has
 the story.
+
+## Documentation
+
+The [wiki](https://github.com/GGEZUS/losker/wiki) is the documentation:
+
+| page | what's on it |
+|---|---|
+| [Installation](https://github.com/GGEZUS/losker/wiki/Installation) | greetd + locker setup, suspend locking, tested scope per distro |
+| [Configuration](https://github.com/GGEZUS/losker/wiki/Configuration) | every key, defaults, the TUI |
+| [OSK](https://github.com/GGEZUS/losker/wiki/OSK) | deck design |
+| [Logos](https://github.com/GGEZUS/losker/wiki/Logos) | the spinning ASCII art pipeline |
+| [Noctalia](https://github.com/GGEZUS/losker/wiki/Noctalia) | desktop-shell coexistence |
+| [Updating](https://github.com/GGEZUS/losker/wiki/Updating) | what system updates can and cannot touch |
+| [Troubleshooting](https://github.com/GGEZUS/losker/wiki/Troubleshooting) | known traps: PAM fallbacks, faillock lockouts, compositor quirks |
+| [Development](https://github.com/GGEZUS/losker/wiki/Development) | architecture, testing, exit codes |
+
+## Contributing
+
+Issues and pull requests are welcome. Contributions land under the same
+license as the project (GPL-3.0-only). The wiki's
+[Development](https://github.com/GGEZUS/losker/wiki/Development) page maps
+the code before you dive in.
+
+## License
+
+GPL-3.0-only — see [LICENSE](LICENSE).
