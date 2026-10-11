@@ -7,9 +7,12 @@
 #   losker-update                # fetch + install the latest release
 #   losker-update --rollback     # back to the previous binary (losker.old)
 #
-# One-time bootstrap on a device (this line also installs losker-update
-# itself, so afterwards it is always just the one word):
-#   curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+# One-time bootstrap on a device (also installs losker-update itself, so
+# afterwards it is always just the one word). The curl stays OUTSIDE sudo's
+# stdin on purpose: piping straight into `sudo sh` breaks when sudo asks
+# for its password without a terminal — it drains the pipe and runs an
+# empty script:
+#   sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sh'
 set -eu
 
 REPO=https://github.com/GGEZUS/losker

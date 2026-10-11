@@ -43,7 +43,7 @@
 # Devices without a toolchain (the touch tablet) pull the rolling release;
 # one-time bootstrap typed on the device, then it is always one word:
 #
-#   curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+#   sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sh'
 #   losker-update
 #
 # Requirements and the full map of moving parts: the wiki Installation page.
@@ -80,7 +80,7 @@ losker installer + updater
 Devices without a toolchain update from that release with one word
 (bootstrap typed on the device once):
 
-  curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+  sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sh'
   losker-update
 
 First install without a clone (later runs of the same line are updates;

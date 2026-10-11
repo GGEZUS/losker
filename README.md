@@ -102,7 +102,7 @@ clone: each build is published as a rolling GitHub release with
 the device updates with one word. Bootstrap, typed on the device once:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sh'
 losker-update                 # ...and every update after that
 ```
 
