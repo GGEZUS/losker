@@ -1,0 +1,77 @@
+#!/bin/sh
+# losker-update — update this machine's losker from the latest GitHub
+# release. Built for the keyboard-less tablet: one word, no ssh, no
+# toolchain. This only refreshes an EXISTING install (binary + art); the
+# first install — PAM, greeter config, keybind — is install.sh's job.
+#
+#   losker-update                # fetch + install the latest release
+#   losker-update --rollback     # back to the previous binary (losker.old)
+#
+# One-time bootstrap on a device (this line also installs losker-update
+# itself, so afterwards it is always just the one word):
+#   curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+set -eu
+
+REPO=https://github.com/GGEZUS/losker
+SELF_SRC=https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update
+UPDATER=/usr/local/bin/losker-update
+BIN=/usr/local/bin/losker
+BIN_OLD=/usr/local/bin/losker.old
+STAMP_FILE=/var/lib/losker/installed-commit
+
+die() { echo "losker-update: $*" >&2; exit 1; }
+
+# one word, no memory of sudo flags: elevate ourselves when needed
+[ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
+
+# when bootstrapped through the pipe, $0 is just "sh" — install the real
+# updater (never the other way around: overwriting the running script file
+# mid-read corrupts it)
+if [ "$0" != "$UPDATER" ]; then
+    command -v curl >/dev/null 2>&1 || die "curl is required"
+    curl -fsSL "$SELF_SRC" -o "$UPDATER"
+    chmod 755 "$UPDATER"
+    echo "installed $UPDATER"
+fi
+
+if [ "${1:-}" = --rollback ]; then
+    [ -x "$BIN_OLD" ] || die "no $BIN_OLD to go back to"
+    cp -a "$BIN" "$BIN.tmp"
+    cp -a "$BIN_OLD" "$BIN"
+    cp -a "$BIN.tmp" "$BIN_OLD"
+    rm -f "$BIN.tmp"
+    echo "rolled back to the previous build ($("$BIN" --version 2>/dev/null || echo '?'))"
+    exit 0
+fi
+[ "${1:-}" != "" ] && die "unknown option: $1 (this script takes none)"
+
+[ "$(uname -m)" = x86_64 ] || die "no prebuilt binary for $(uname -m) — update from a clone with install.sh"
+command -v curl >/dev/null 2>&1 || die "curl is required"
+command -v tar >/dev/null 2>&1 || die "tar is required"
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+base=$REPO/releases/latest/download
+curl -fsSL "$base/losker-x86_64" -o "$tmp/losker"
+curl -fsSL "$base/logos.tar.gz" -o "$tmp/logos.tar.gz"
+curl -fsSL "$base/commit.txt" -o "$tmp/commit.txt" || :   # advisory stamp
+
+# a download that cannot run must never replace a working lock screen
+"$tmp/losker" --version >/dev/null || die "downloaded binary does not run — leaving the installed one alone"
+tar -xzf "$tmp/logos.tar.gz" -C "$tmp"
+
+[ -x "$BIN" ] && cp -a "$BIN" "$BIN_OLD"
+install -m755 "$tmp/losker" "$BIN"
+mkdir -p /etc/losker/logos /var/lib/losker
+install -m644 "$tmp"/logos/*.txt /etc/losker/logos/
+# legacy greeter art belongs to /etc/greetd; a machine without that dir has
+# no greeter role, and creating it would imply one
+[ -d /etc/greetd ] && install -m644 "$tmp"/losker-ascii*.txt /etc/greetd/
+[ -s "$tmp/commit.txt" ] && install -m644 "$tmp/commit.txt" "$STAMP_FILE"
+
+commit=$(printf '%s' "$(cat "$tmp/commit.txt" 2>/dev/null)" | cut -c1-12)
+echo "updated: $("$BIN" --version 2>/dev/null || echo '?'), commit ${commit:-unknown}"
+echo "picked up at: next lock (locker) / next boot (greeter); a locker"
+echo "running right now keeps the old build until it unlocks"
+[ -s /etc/pam.d/losker ] || echo "warning: /etc/pam.d/losker missing — --lock refuses to lock until install.sh sets it up"

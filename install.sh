@@ -3,11 +3,15 @@
 # update, and shipping builds to the keyboard-less devices.
 #
 #   ./install.sh                    install or update THIS machine
+#   ./install.sh --release          update here, then publish the built
+#                                   binary + art as the rolling GitHub
+#                                   release — devices then update with one
+#                                   word: losker-update (dist/losker-update)
 #   ./install.sh --push <ssh-host>  update this machine, then copy the fresh
-#                                   binary (+ changed logos) to <ssh-host>;
-#                                   no toolchain needed on the far end, but
-#                                   its sudo must run without a terminal
-#                                   (NOPASSWD), as lock screens deserve
+#                                   binary (+ changed logos) to <ssh-host>
+#                                   over ssh — the LAN alternative when a
+#                                   device cannot reach GitHub (its sudo
+#                                   must run without a terminal)
 #   ./install.sh --status           installed vs origin/main, changes nothing
 #   ./install.sh --rollback         put back the previous binary (losker.old)
 #
@@ -36,6 +40,12 @@
 #   -y, --yes         take the default answer at every question
 #   --dry-run         print the root and ssh actions instead of running them
 #
+# Devices without a toolchain (the touch tablet) pull the rolling release;
+# one-time bootstrap typed on the device, then it is always one word:
+#
+#   curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+#   losker-update
+#
 # Requirements and the full map of moving parts: the wiki Installation page.
 set -Eeuo pipefail
 
@@ -60,11 +70,18 @@ usage() {
 losker installer + updater
 
   install.sh                    install or update THIS machine
+  install.sh --release          update here, then publish binary + art as the
+                                rolling GitHub release (gh; pushed, clean tree)
   install.sh --push <ssh-host>  update here, then copy binary + changed logos
-                                to <ssh-host> over ssh (no toolchain needed
-                                on the far end)
+                                to <ssh-host> over ssh (the LAN fallback)
   install.sh --status           installed vs origin/main, changes nothing
   install.sh --rollback         put back the previous binary (losker.old)
+
+Devices without a toolchain update from that release with one word
+(bootstrap typed on the device once):
+
+  curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+  losker-update
 
 First install without a clone (later runs of the same line are updates;
 the clone lands in $LOSKER_SRC, default ~/.local/share/losker/src):
@@ -143,6 +160,7 @@ while [ $# -gt 0 ]; do
         --push)     [ $# -ge 2 ] || die "--push needs a host (user@host)"; MODE=push; PUSH_HOST=$2; shift 2;;
         --push=*)   MODE=push; PUSH_HOST=${1#*=}; [ -n "$PUSH_HOST" ] || die "--push needs a host"; shift;;
         --status)   MODE=status; shift;;
+        --release)  MODE=release; shift;;
         --rollback) MODE=rollback; shift;;
         --force)    FORCE=1; shift;;
         --test)     RUN_TESTS=1; shift;;
@@ -479,6 +497,48 @@ push_to_host() {
     say "  running right now keeps the old build until it unlocks"
 }
 
+# --- release publishing -------------------------------------------------------
+
+RELEASE_TAG=latest   # one rolling release; git history is the real changelog
+
+# release_preflight — fail fast, BEFORE the build. A release asset must match
+# a public, clean commit: anyone (the tablet included) downloads it trusting
+# that binary == that sha.
+release_preflight() {
+    have gh || die "gh is needed to publish (pacman: github-cli)"
+    gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth login)"
+    [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" ] \
+        || die "HEAD is not origin/$BRANCH — push first, then --release"
+    [ -z "$(git status --porcelain --untracked-files=no --ignore-submodules=dirty)" ] \
+        || die "working tree is dirty — releases build clean trees only"
+}
+
+publish_release() {
+    step "Publishing the rolling '$RELEASE_TAG' release"
+    local stage head
+    head=$(git rev-parse HEAD)
+    stage=$(mktemp -d)
+    cp target/release/losker "$stage/losker-x86_64"
+    echo "$head" >"$stage/commit.txt"   # losker-update stamps it on devices
+    tar -czf "$stage/logos.tar.gz" -C assets logos \
+        losker-ascii.txt losker-ascii-med.txt losker-ascii-low.txt
+    # delete + recreate so the tag always points at the commit the assets
+    # were built from (re-uploading would silently keep the old target)
+    if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+        gh release delete "$RELEASE_TAG" --yes --cleanup-tag
+    fi
+    gh release create "$RELEASE_TAG" \
+        "$stage/losker-x86_64" "$stage/logos.tar.gz" "$stage/commit.txt" \
+        --target "$head" --latest \
+        --title "losker $(git rev-parse --short HEAD)" \
+        --notes "$(git log -1 --format='%h %s
+
+Built and tested by \`install.sh --release\`. Devices update with losker-update.')"
+    rm -rf "$stage"
+    say "  published — devices: losker-update   (assets: losker-x86_64,"
+    say "  logos.tar.gz, commit.txt at $REPO_URL/releases)"
+}
+
 # --- modes ------------------------------------------------------------------
 
 do_status() {
@@ -547,18 +607,20 @@ if [ "$MODE" = rollback ]; then do_rollback; exit 0; fi
 
 check_deps
 update_source
+if [ "$MODE" = release ]; then release_preflight; fi
 REPO_ID=$(repo_id)
 stamp=$(read_stamp)
 
 if [ "$FORCE" = 0 ] && [ "$stamp" = "$REPO_ID" ] && [ -x "$BIN" ]; then
     say "Already installed at $(short_id) — nothing to do (--force to rebuild)."
-    if [ "$MODE" != push ]; then exit 0; fi
+    if [ "$MODE" = install ]; then exit 0; fi
 else
     build
     install_local
 fi
 
-if [ "$MODE" = push ]; then push_to_host; fi
+if [ "$MODE" = push ];    then push_to_host; fi
+if [ "$MODE" = release ]; then publish_release; fi
 
 step "Done"
 say "  the two-minute check worth running after any risky update:"

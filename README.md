@@ -94,16 +94,23 @@ creates `/etc/pam.d/losker` **only** when missing, and never rewrites
 machine-tuned configs — the full contract is in the script header. Deployed
 commits are stamped into `/var/lib/losker/installed-commit`, so a current
 machine is a no-op, `--status` reports which side of upstream you are on,
-`--rollback` restores the kept `losker.old`, and other devices update
-without a toolchain of their own:
+and `--rollback` restores the kept `losker.old`.
+
+**Other devices** (a keyboard-less tablet) need no toolchain, no ssh, no
+clone: each build is published as a rolling GitHub release with
+`./install.sh --release` (tested x86_64 binary + art + commit stamp), and
+the device updates with one word. Bootstrap, typed on the device once:
 
 ```bash
-./install.sh --push user@tablet   # update here, then ship binary + changed art
+curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sudo sh
+losker-update                 # ...and every update after that
 ```
 
-(far end: ssh reachable, sudo allowed without a terminal). What it
-deliberately leaves to you — greetd's config, the lock keybind, shell
-coexistence — is exactly the by-hand material below and on the wiki's
+A device that cannot reach GitHub at all can still be fed over ssh:
+`./install.sh --push user@host` updates this machine, then ships the binary
+and any changed art. What the installer deliberately leaves to you —
+greetd's config, the lock keybind, shell coexistence — is exactly the
+by-hand material below and on the wiki's
 [Installation](https://github.com/GGEZUS/losker/wiki/Installation) page.
 
 ### Build (by hand)
