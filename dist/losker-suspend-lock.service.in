@@ -1,0 +1,22 @@
+# losker-suspend-lock.service — lock the session one second before suspend.
+# Template: install.sh fills @USER@ / @UID@ / @WAYLAND_DISPLAY@ from the
+# invoking session and enables the unit. The load-bearing details (why
+# KillMode=process, why the sleep 1, why it fails open) are on the wiki:
+# Installation -> Suspend locking.
+[Unit]
+Description=losker screen lock before suspend
+Before=sleep.target
+ConditionPathExists=/run/user/@UID@/@WAYLAND_DISPLAY@
+
+[Service]
+Type=oneshot
+User=@USER@
+Environment=NO_AT_BRIDGE=1
+Environment=GTK_USE_PORTAL=0
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+Environment=WAYLAND_DISPLAY=@WAYLAND_DISPLAY@
+KillMode=process
+ExecStart=/bin/sh -c 'setsid /usr/local/bin/losker-suspend-lock >/dev/null 2>&1 & sleep 1'
+
+[Install]
+WantedBy=sleep.target

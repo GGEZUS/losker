@@ -82,7 +82,31 @@ page lists what moves per distro. Beyond that, you are on your own.
 
 ## Install
 
-### Build
+### One command — first install and every update
+
+```bash
+curl -sSL https://raw.githubusercontent.com/GGEZUS/losker/main/install.sh | bash
+```
+
+From a clone, the same flow is `./install.sh`. It fetches, builds (the test
+suite gates each install), deploys the binary and the version-coupled art,
+creates `/etc/pam.d/losker` **only** when missing, and never rewrites
+machine-tuned configs — the full contract is in the script header. Deployed
+commits are stamped into `/var/lib/losker/installed-commit`, so a current
+machine is a no-op, `--status` reports which side of upstream you are on,
+`--rollback` restores the kept `losker.old`, and other devices update
+without a toolchain of their own:
+
+```bash
+./install.sh --push user@tablet   # update here, then ship binary + changed art
+```
+
+(far end: ssh reachable, sudo allowed without a terminal). What it
+deliberately leaves to you — greetd's config, the lock keybind, shell
+coexistence — is exactly the by-hand material below and on the wiki's
+[Installation](https://github.com/GGEZUS/losker/wiki/Installation) page.
+
+### Build (by hand)
 
 ```bash
 cargo build --release && cargo test
@@ -136,7 +160,9 @@ answers (full copy-paste blocks on the wiki):
 
 - **Suspend**: a systemd sleep hook runs the same respawn loop detached, one
   second before the machine sleeps
-  ([Installation: suspend locking](https://github.com/GGEZUS/losker/wiki/Installation#suspend-locking-systemd-sleep-hook)).
+  ([Installation: suspend locking](https://github.com/GGEZUS/losker/wiki/Installation#suspend-locking-systemd-sleep-hook)) —
+  `./install.sh --suspend` templates and enables the same two files, shipped
+  in `dist/`.
 - **noctalia**: if you run it, its own lock needs disabling in two places,
   both in `~/.local/state/noctalia/settings.toml` (the json `lockOnSuspend`
   key is dead). Verified against noctalia 5.0.1; details on the wiki's

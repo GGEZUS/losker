@@ -1,0 +1,11 @@
+#!/bin/sh
+# losker-suspend-lock — the suspend-time lock, detached from the sleep unit.
+# Same respawn contract as the keybind supervisor: exit 0/1/2 means "stop",
+# anything else (crash, lock lost) respawns until the screen is recovered.
+# Installed by install.sh (or by hand, wiki: Installation -> Suspend locking).
+while :; do
+    NO_AT_BRIDGE=1 GTK_USE_PORTAL=0 /usr/local/bin/losker --lock
+    rc=$?
+    [ "$rc" -eq 0 ] || [ "$rc" -eq 1 ] || [ "$rc" -eq 2 ] && break
+    sleep 0.5
+done
