@@ -7,6 +7,13 @@
 #   losker-update                # fetch + install the latest release
 #   losker-update --rollback     # back to the previous binary (losker.old)
 #
+# A no-op when the stamp says this machine already carries the released
+# commit — a rerun must never bury losker.old under a duplicate of the
+# current build and leave the machine without a real rollback.
+#
+# Run it from a real terminal (foot), not a launcher: sudo prompts inline
+# there, while a graphical askpass over the touch OSK is a mistype farm.
+#
 # One-time bootstrap on a device (also installs losker-update itself, so
 # afterwards it is always just the one word). The curl stays OUTSIDE sudo's
 # stdin on purpose: piping straight into `sudo sh` breaks when sudo asks
@@ -24,6 +31,11 @@ STAMP_FILE=/var/lib/losker/installed-commit
 
 die() { echo "losker-update: $*" >&2; exit 1; }
 
+# -f fails loudly on HTTP errors; --retry rides out the wifi hiccups that
+# are this device's most likely failure mode — they must not also be its
+# least diagnosable one
+fetch() { curl -fsSL --retry 3 --max-time 120 "$@"; }
+
 # one word, no memory of sudo flags: elevate ourselves when needed
 [ "$(id -u)" = 0 ] || exec sudo "$0" "$@"
 
@@ -32,7 +44,7 @@ die() { echo "losker-update: $*" >&2; exit 1; }
 # mid-read corrupts it)
 if [ "$0" != "$UPDATER" ]; then
     command -v curl >/dev/null 2>&1 || die "curl is required"
-    curl -fsSL "$SELF_SRC" -o "$UPDATER"
+    fetch "$SELF_SRC" -o "$UPDATER" || die "download failed: losker-update itself"
     chmod 755 "$UPDATER"
     echo "installed $UPDATER"
 fi
@@ -43,6 +55,14 @@ if [ "${1:-}" = --rollback ]; then
     cp -a "$BIN_OLD" "$BIN"
     cp -a "$BIN.tmp" "$BIN_OLD"
     rm -f "$BIN.tmp"
+    # break the stamp the same way install.sh does, or the no-op check
+    # below would refuse to re-apply the release the user just rolled
+    # back from (leaving a fresh losker-update as the only way back)
+    stamp=$(cat "$STAMP_FILE" 2>/dev/null || true)
+    case $stamp in
+        ""|rolled-back-from*) ;;   # nothing deployed-stamped / already broken
+        *) printf 'rolled-back-from %s\n' "$stamp" >"$STAMP_FILE" ;;
+    esac
     echo "rolled back to the previous build ($("$BIN" --version 2>/dev/null || echo '?'))"
     exit 0
 fi
@@ -56,17 +76,35 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 base=$REPO/releases/latest/download
-curl -fsSL "$base/losker-x86_64" -o "$tmp/losker"
-curl -fsSL "$base/logos.tar.gz" -o "$tmp/logos.tar.gz"
-curl -fsSL "$base/commit.txt" -o "$tmp/commit.txt" || :   # advisory stamp
+
+echo "checking the latest release..."
+fetch "$base/commit.txt" -o "$tmp/commit.txt" \
+    || die "download failed: commit.txt (release metadata)"
+
+# current per the stamp? Nothing to do — and notably no reinstall, which
+# is what used to bury losker.old under a duplicate of the current build
+stamp=$(cat "$STAMP_FILE" 2>/dev/null || true)
+commit=$(cat "$tmp/commit.txt" 2>/dev/null || true)
+if [ -n "$stamp" ] && [ -n "$commit" ] && [ "$stamp" = "$commit" ]; then
+    echo "already up to date ($(printf '%s' "$commit" | cut -c1-12))"
+    exit 0
+fi
+
+echo "downloading the latest release (binary + art)..."
+fetch "$base/losker-x86_64" -o "$tmp/losker" || die "download failed: losker-x86_64"
+fetch "$base/logos.tar.gz" -o "$tmp/logos.tar.gz" || die "download failed: logos.tar.gz"
 chmod 755 "$tmp/losker"   # curl -o saves without the exec bit
 
 # a download that cannot run must never replace a working lock screen
 "$tmp/losker" --version >/dev/null || die "downloaded binary does not run — leaving the installed one alone"
-tar -xzf "$tmp/logos.tar.gz" -C "$tmp"
+tar -xzf "$tmp/logos.tar.gz" -C "$tmp" || die "the art archive did not unpack"
 
+echo "installing..."
 [ -x "$BIN" ] && cp -a "$BIN" "$BIN_OLD"
-install -m755 "$tmp/losker" "$BIN"
+# stage beside the target and mv — rename is atomic, so power loss mid-
+# install can never leave a half-written lock-screen binary behind
+install -m755 "$tmp/losker" "$BIN.tmp"
+mv -f "$BIN.tmp" "$BIN"
 mkdir -p /etc/losker/logos /var/lib/losker
 install -m644 "$tmp"/logos/*.txt /etc/losker/logos/
 # legacy greeter art belongs to /etc/greetd; a machine without that dir has
@@ -74,8 +112,8 @@ install -m644 "$tmp"/logos/*.txt /etc/losker/logos/
 [ -d /etc/greetd ] && install -m644 "$tmp"/losker-ascii*.txt /etc/greetd/
 [ -s "$tmp/commit.txt" ] && install -m644 "$tmp/commit.txt" "$STAMP_FILE"
 
-commit=$(printf '%s' "$(cat "$tmp/commit.txt" 2>/dev/null)" | cut -c1-12)
-echo "updated: $("$BIN" --version 2>/dev/null || echo '?'), commit ${commit:-unknown}"
+short=$(printf '%s' "$commit" | cut -c1-12)
+echo "updated: $("$BIN" --version 2>/dev/null || echo '?'), commit ${short:-unknown}"
 echo "picked up at: next lock (locker) / next boot (greeter); a locker"
 echo "running right now keeps the old build until it unlocks"
 [ -s /etc/pam.d/losker ] || echo "warning: /etc/pam.d/losker missing — --lock refuses to lock until install.sh sets it up"

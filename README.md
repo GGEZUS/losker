@@ -99,7 +99,8 @@ and `--rollback` restores the kept `losker.old`.
 **Other devices** (a keyboard-less tablet) need no toolchain, no ssh, no
 clone: each build is published as a rolling GitHub release with
 `./install.sh --release` (tested x86_64 binary + art + commit stamp), and
-the device updates with one word. Bootstrap, typed on the device once:
+the device updates with one word — a no-op when it already carries the
+released commit. Bootstrap, typed on the device once:
 
 ```bash
 sudo sh -c 'curl -fsSL https://raw.githubusercontent.com/GGEZUS/losker/main/dist/losker-update | sh'
