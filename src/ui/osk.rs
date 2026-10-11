@@ -5,6 +5,11 @@
 //! regardless of the provider). Emits events to the app only — no
 //! virtual-keyboard protocol, no wvkbd.
 //!
+//! Per-tap cost: the unpressed deck is cached as an image (rebuilt only on
+//! layer/shift/scale changes); a tap blits it and paints the one pressed
+//! cap live. Slow CPUs (the touch tablet) must not re-render 44 keycaps to
+//! acknowledge a keystroke.
+//!
 //! Layout is the typewriter staircase, not a centered grid: the letter
 //! rows step right by a quarter key so A falls between Q and W and Z
 //! between A and S. SHIFT and the layer key below it form a flush-left
@@ -69,6 +74,13 @@ const STAGGER_Q: f64 = 18.0;
 const STAGGER_A: f64 = 36.0;
 const DEPTH: f64 = 5.0;
 const RADIUS: f64 = 3.0;
+/// slack for a drifting fingertip: a release off every cap but still within
+/// this margin of the PRESSED cap fires it. Touch taps wander a few px
+/// between down and up — without the margin a drift into a gap or just off
+/// the deck edge silently swallows the key (reads as "not registered" on a
+/// touchscreen). A release that lands on a DIFFERENT cap still cancels:
+/// that is a deliberate slide-off, not drift.
+const RELEASE_SLOP: f64 = 12.0;
 
 /// Deck colors, derived from the configured accent so the keyboard reads
 /// as part of the same terminal as everything else (None = stock green,
@@ -199,6 +211,19 @@ struct DeckState {
     on_event: Box<dyn Fn(OskEvent)>,
 }
 
+/// The unpressed deck pre-rendered into an image, so a tap costs a blit
+/// plus one live keycap instead of re-rendering all ~44 caps inside a frame
+/// (same trick as the CRT layer's scanline cache). Single entry: the look
+/// cycles through a handful of states, and a state change pays one render —
+/// exactly what a full redraw cost per tap before. The pressed inversion is
+/// NEVER baked in; it is drawn live on top of the blit.
+struct DeckCache {
+    /// (sym_layer, shifted, shift_latched, scale factor) — everything that
+    /// changes the unpressed deck's look
+    key: (bool, bool, bool, i32),
+    surf: cairo::ImageSurface,
+}
+
 pub struct Osk {
     pub container: gtk4::Box,
     area: gtk4::DrawingArea,
@@ -225,14 +250,37 @@ impl Osk {
             on_event: Box::new(on_event),
         }));
 
-        relayout(&state, &area);
+        // the deck image cache lives BESIDE DeckState, not inside it: the
+        // draw func holds a Ref borrow of the state while (re)building the
+        // cache, and borrow_mut-ing the same cell under it would panic
+        // (same class of trap as the pressed-handler's boot-proven one)
+        let cache: Rc<RefCell<Option<DeckCache>>> = Rc::new(RefCell::new(None));
+
+        relayout(&state, &area, &cache);
+
+        // warm the cache before the first frame: the deck's first raise
+        // then blits instead of rendering 44 caps inside a frame. Scale is
+        // a guess here (the window is not realized yet) — a wrong guess
+        // rebuilds once, the moment the real scale is known.
+        {
+            let st = state.borrow();
+            if let Some(surf) = render_deck_unpressed(&st, 1) {
+                *cache.borrow_mut() = Some(DeckCache {
+                    key: deck_cache_key(&st, 1),
+                    surf,
+                });
+            }
+        }
 
         {
             let weak = Rc::downgrade(&state);
-            area.set_draw_func(move |_area, cr, _w, _h| {
-                if let Some(st) = weak.upgrade() {
-                    draw_deck(&st.borrow(), cr);
-                }
+            let cache_w = Rc::downgrade(&cache);
+            area.set_draw_func(move |area, cr, _w, _h| {
+                let (Some(st), Some(cache)) = (weak.upgrade(), cache_w.upgrade()) else {
+                    return;
+                };
+                let st = st.borrow();
+                draw_deck_cached(&st, &cache, area.scale_factor(), cr);
             });
         }
 
@@ -253,12 +301,15 @@ impl Osk {
             });
             let state_r = state.clone();
             let area_r = area.clone();
+            let cache_r = cache.clone();
             gesture.connect_released(move |_g, _n, x, y| {
-                let hit = hit_test(&state_r.borrow(), x, y);
                 let pressed = state_r.borrow_mut().pressed.take();
-                if let (Some(p), Some(h)) = (pressed, hit) {
-                    if p == h && apply_key(&state_r, h) {
-                        relayout(&state_r, &area_r); // layer switch: new legends
+                if let Some(p) = pressed {
+                    // bound before the &&: the borrow inside the condition
+                    // must not outlive the expression (see pressed-handler)
+                    let fires = release_fires(&state_r.borrow(), p, x, y);
+                    if fires && apply_key(&state_r, p) {
+                        relayout(&state_r, &area_r, &cache_r); // layer switch: new legends
                     }
                 }
                 area_r.queue_draw();
@@ -344,7 +395,11 @@ impl OskDock {
 }
 
 /// Rebuild the key layout for the current layer; also (re)size the area.
-fn relayout(state: &Rc<RefCell<DeckState>>, area: &gtk4::DrawingArea) {
+fn relayout(
+    state: &Rc<RefCell<DeckState>>,
+    area: &gtk4::DrawingArea,
+    cache: &Rc<RefCell<Option<DeckCache>>>,
+) {
     let (rows, total) = {
         let st = state.borrow();
         layout_rows(st.sym_layer)
@@ -354,6 +409,7 @@ fn relayout(state: &Rc<RefCell<DeckState>>, area: &gtk4::DrawingArea) {
         st.layout = rows;
         st.total = total;
     }
+    *cache.borrow_mut() = None; // geometry changed: next draw re-renders
     area.set_size_request(total.0 as i32, total.1 as i32);
     area.queue_draw();
 }
@@ -468,6 +524,27 @@ fn hit_test(st: &DeckState, x: f64, y: f64) -> Option<(usize, usize)> {
     None
 }
 
+/// Does the release fire the pressed key? Same key: yes. A different cap:
+/// no — that is a deliberate slide-off. No cap at all (a gap, the chassis
+/// margin, just off the deck): yes within [`RELEASE_SLOP`] of the pressed
+/// cap — fingertip drift, not intent.
+fn release_fires(st: &DeckState, press: (usize, usize), x: f64, y: f64) -> bool {
+    match hit_test(st, x, y) {
+        Some(h) => h == press,
+        None => st
+            .layout
+            .get(press.0)
+            .and_then(|row| row.get(press.1))
+            .map(|k| {
+                x >= k.x - RELEASE_SLOP
+                    && x <= k.x + k.w + RELEASE_SLOP
+                    && y >= k.y - RELEASE_SLOP
+                    && y <= k.y + KEY_H + RELEASE_SLOP
+            })
+            .unwrap_or(false),
+    }
+}
+
 /// Apply a key action; returns true when the deck needs a relayout.
 /// State is mutated and the event computed under one short borrow; the
 /// handler runs AFTER the borrow drops — calling back into GTK while
@@ -529,11 +606,78 @@ fn apply_key(state: &Rc<RefCell<DeckState>>, (ri, ki): (usize, usize)) -> bool {
 
 // ── drawing ───────────────────────────────────────────────────────────
 
-fn draw_deck(st: &DeckState, cr: &cairo::Context) {
-    let pal = &st.pal;
-    let (tw, th) = st.total;
+/// Everything that changes the UNPRESSED deck's look — the cache key.
+fn deck_cache_key(st: &DeckState, scale: i32) -> (bool, bool, bool, i32) {
+    (st.sym_layer, st.shifted, st.shift_latched, scale)
+}
 
-    // the chassis: a near-black phosphor panel the caps sit in
+/// Cached deck draw: blit the pre-rendered unpressed image, then paint the
+/// pressed cap (if any) live on top. The image rebuilds only when the look
+/// state changes (layer/shift/scale); a plain tap is one blit + one keycap.
+fn draw_deck_cached(
+    st: &DeckState,
+    cache: &RefCell<Option<DeckCache>>,
+    scale: i32,
+    cr: &cairo::Context,
+) {
+    let key = deck_cache_key(st, scale);
+    if cache.borrow().as_ref().map_or(true, |c| c.key != key) {
+        match render_deck_unpressed(st, scale) {
+            Some(surf) => *cache.borrow_mut() = Some(DeckCache { key, surf }),
+            // surface refused (memory?): draw direct, uncached — no worse
+            // than the deck's pre-cache cost, and next frame tries again
+            None => return draw_deck(st, cr),
+        }
+    }
+    {
+        let cell = cache.borrow();
+        let deck = cell.as_ref().expect("deck cache just built");
+        cr.save().unwrap();
+        // the image is device-scale px; the target context is logical
+        cr.scale(1.0 / scale as f64, 1.0 / scale as f64);
+        cr.set_source_surface(&deck.surf, 0.0, 0.0).unwrap();
+        cr.paint().unwrap();
+        cr.restore().unwrap();
+    }
+    if let Some((ri, ki)) = st.pressed {
+        draw_key(st, cr, ri, ki, true);
+    }
+}
+
+/// Render the deck with no cap pressed into a device-resolution image.
+/// Pure cairo — no GTK — so the tests can drive it headless.
+fn render_deck_unpressed(st: &DeckState, scale: i32) -> Option<cairo::ImageSurface> {
+    let s = scale as f64;
+    let img = cairo::ImageSurface::create(
+        cairo::Format::ARgb32,
+        (st.total.0 * s).round().max(1.0) as i32,
+        (st.total.1 * s).round().max(1.0) as i32,
+    )
+    .ok()?;
+    let cr = cairo::Context::new(&img).ok()?;
+    cr.scale(s, s); // draw in logical px at device resolution
+    draw_chassis(&cr, &st.pal, st.total.0, st.total.1);
+    for (ri, row) in st.layout.iter().enumerate() {
+        for (ki, _) in row.iter().enumerate() {
+            draw_key(st, &cr, ri, ki, false);
+        }
+    }
+    Some(img)
+}
+
+/// Uncached full draw — the fallback path when a surface can't be had, and
+/// the exact pre-cache behavior.
+fn draw_deck(st: &DeckState, cr: &cairo::Context) {
+    draw_chassis(cr, &st.pal, st.total.0, st.total.1);
+    for (ri, row) in st.layout.iter().enumerate() {
+        for (ki, _) in row.iter().enumerate() {
+            draw_key(st, cr, ri, ki, st.pressed == Some((ri, ki)));
+        }
+    }
+}
+
+/// The chassis: a near-black phosphor panel the caps sit in.
+fn draw_chassis(cr: &cairo::Context, pal: &DeckPalette, tw: f64, th: f64) {
     cr.set_source_rgba(
         pal.chassis_bg.0,
         pal.chassis_bg.1,
@@ -550,20 +694,23 @@ fn draw_deck(st: &DeckState, cr: &cairo::Context) {
     cr.set_line_width(1.0);
     rounded_rect(cr, 0.5, 0.5, tw - 1.0, th - 1.0, CHASSIS_R);
     cr.stroke().unwrap();
+}
 
-    for (ri, row) in st.layout.iter().enumerate() {
-        for (ki, k) in row.iter().enumerate() {
-            let pressed = st.pressed == Some((ri, ki));
-            let is_shift = matches!(k.action, KeyAction::ToggleShift);
-            let latched = is_shift && (st.shifted || st.shift_latched);
-            let led = if is_shift {
-                shift_led(st.shifted, st.shift_latched)
-            } else {
-                LedState::Off
-            };
-            draw_keycap(cr, pal, k, pressed, latched, led);
-        }
-    }
+/// One cap, exactly as the deck paints it — shared by the cache render
+/// (`pressed` forced false) and the live pressed overlay (forced true), so
+/// the two paths can never drift apart.
+fn draw_key(st: &DeckState, cr: &cairo::Context, ri: usize, ki: usize, pressed: bool) {
+    let Some(k) = st.layout.get(ri).and_then(|r| r.get(ki)) else {
+        return;
+    };
+    let is_shift = matches!(k.action, KeyAction::ToggleShift);
+    let latched = is_shift && (st.shifted || st.shift_latched);
+    let led = if is_shift {
+        shift_led(st.shifted, st.shift_latched)
+    } else {
+        LedState::Off
+    };
+    draw_keycap(cr, &st.pal, k, pressed, latched, led);
 }
 
 fn rounded_rect(cr: &cairo::Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
@@ -854,5 +1001,90 @@ mod tests {
     fn tab_points_up_when_stowed_and_down_when_raised() {
         assert_eq!(tab_glyph(false), "▲"); // deck hidden: raise it
         assert_eq!(tab_glyph(true), "▼"); // deck showing: stow it
+    }
+
+    // a DeckState over the pure layout, for hit/release testing
+    fn deck_with(pressed: Option<(usize, usize)>) -> DeckState {
+        let (layout, total) = layout_rows(false);
+        DeckState {
+            shifted: false,
+            shift_latched: false,
+            sym_layer: false,
+            pressed,
+            layout,
+            total,
+            pal: DeckPalette::new(None),
+            on_event: Box::new(|_| ()),
+        }
+    }
+
+    #[test]
+    fn release_forgives_finger_drift_but_honors_slide_off() {
+        let st = deck_with(None);
+        let (q, w) = (&st.layout[1][0], &st.layout[1][1]); // Q and its neighbor W
+        let press = (1, 0);
+        let cy = q.y + KEY_H / 2.0;
+
+        // dead-center release: fires (the always-did case)
+        assert!(release_fires(&st, press, q.x + q.w / 2.0, cy));
+        // drifted into the 6px gap between caps: still fires
+        assert!(release_fires(&st, press, q.x + q.w + 3.0, cy));
+        // drifted into the 6px gap above the row: still fires
+        assert!(release_fires(&st, press, q.x + q.w / 2.0, q.y - 3.0));
+        // off the deck's left edge, within slop: fires
+        assert!(release_fires(&st, press, q.x - 10.0, cy));
+        // onto the neighbor cap: a deliberate slide-off — cancels
+        assert!(!release_fires(&st, press, w.x + w.w / 2.0, cy));
+        // past the slop margin with no cap under the finger: cancels
+        assert!(!release_fires(&st, press, q.x - 13.0, cy));
+        assert!(!release_fires(&st, press, q.x + q.w / 2.0, q.y - 13.0));
+        // below the bottom row (space bar), within slop vs past it
+        let bottom = st.layout.last().unwrap().last().unwrap();
+        let space = (4, st.layout[4].len() - 1);
+        let bx = bottom.x + bottom.w / 2.0;
+        assert!(release_fires(&st, space, bx, bottom.y + KEY_H + 10.0));
+        assert!(!release_fires(&st, space, bx, bottom.y + KEY_H + 13.0));
+    }
+
+    #[test]
+    fn cached_image_never_bakes_the_pressed_cap() {
+        // headless cairo, no GTK: render the cached image with a key held
+        // down — the image must show the RESTING cap; the live overlay must
+        // show the bright accent inversion
+        let st = deck_with(Some((1, 1)));
+        let mut img = render_deck_unpressed(&st, 1).expect("deck surface");
+
+        // sample inside the cap's face, clear of the legend glyph
+        let k = &st.layout[1][1];
+        let (sx, sy) = ((k.x + 12.0) as i32, (k.y + 12.0) as i32);
+        let resting = pixel_sum(&mut img, sx, sy);
+        assert!(
+            resting < 100,
+            "resting cap face must stay near-black: {resting}"
+        );
+
+        let mut live = cairo::ImageSurface::create(
+            cairo::Format::ARgb32,
+            st.total.0 as i32,
+            st.total.1 as i32,
+        )
+        .expect("overlay surface");
+        let cr = cairo::Context::new(&live).expect("overlay context");
+        draw_key(&st, &cr, 1, 1, true);
+        drop(cr);
+        let pressed = pixel_sum(&mut live, sx, sy);
+        assert!(
+            pressed > 300,
+            "pressed overlay must invert to full accent: {pressed}"
+        );
+    }
+
+    /// channel sum at (x, y) of an opaque ARGB32 surface — coarse, but the
+    /// resting face (~39) and the accent inversion (~367) are far apart
+    fn pixel_sum(img: &mut cairo::ImageSurface, x: i32, y: i32) -> u32 {
+        let stride = img.stride() as usize;
+        let data = img.data().expect("surface data");
+        let i = y as usize * stride + x as usize * 4;
+        u32::from(data[i]) + u32::from(data[i + 1]) + u32::from(data[i + 2])
     }
 }
