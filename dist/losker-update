@@ -59,6 +59,7 @@ base=$REPO/releases/latest/download
 curl -fsSL "$base/losker-x86_64" -o "$tmp/losker"
 curl -fsSL "$base/logos.tar.gz" -o "$tmp/logos.tar.gz"
 curl -fsSL "$base/commit.txt" -o "$tmp/commit.txt" || :   # advisory stamp
+chmod 755 "$tmp/losker"   # curl -o saves without the exec bit
 
 # a download that cannot run must never replace a working lock screen
 "$tmp/losker" --version >/dev/null || die "downloaded binary does not run — leaving the installed one alone"
