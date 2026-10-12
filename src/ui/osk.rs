@@ -74,13 +74,18 @@ const STAGGER_Q: f64 = 18.0;
 const STAGGER_A: f64 = 36.0;
 const DEPTH: f64 = 5.0;
 const RADIUS: f64 = 3.0;
-/// slack for a drifting fingertip: a release off every cap but still within
-/// this margin of the PRESSED cap fires it. Touch taps wander a few px
-/// between down and up — without the margin a drift into a gap or just off
-/// the deck edge silently swallows the key (reads as "not registered" on a
-/// touchscreen). A release that lands on a DIFFERENT cap still cancels:
-/// that is a deliberate slide-off, not drift.
-const RELEASE_SLOP: f64 = 12.0;
+/// Slack for a fingertip, as a fraction of the key height so it scales with
+/// the deck. The caps are ~10.6mm on the 14" laptop panel but only ~7.6mm
+/// on the 10.5" tablet (below touch-target guidance), so on the dense panel
+/// a touch-down that misses every cap is routine, not exceptional — an
+/// exact-rect press silently ate those, which read on the tablet as "I
+/// pressed the key and nothing happened". The slop covers BOTH halves of a
+/// tap: a press that misses every cap grabs the NEAREST cap within this
+/// margin, and a release within it of the pressed cap still fires that key
+/// (same cap trivially, a drifted gap or edge landing too). A release
+/// clearly onto another cap cancels — that is a deliberate slide-off, not
+/// drift.
+const FINGER_SLOP: f64 = KEY_H * 0.45;
 
 /// Deck colors, derived from the configured accent so the keyboard reads
 /// as part of the same terminal as everything else (None = stock green,
@@ -294,6 +299,7 @@ impl Osk {
                 // temporary (the Ref borrow) alive for the whole block,
                 // which collides with the borrow_mut below (boot-proven crash)
                 let hit = hit_test(&state_g.borrow(), x, y);
+                osk_trace(if hit.is_some() { "press: hit" } else { "press: miss" });
                 if let Some(hit) = hit {
                     state_g.borrow_mut().pressed = Some(hit);
                     area_g.queue_draw();
@@ -308,17 +314,37 @@ impl Osk {
                     // bound before the &&: the borrow inside the condition
                     // must not outlive the expression (see pressed-handler)
                     let fires = release_fires(&state_r.borrow(), p, x, y);
+                    osk_trace(if fires {
+                        "release: fires"
+                    } else {
+                        "release: slide-off cancel"
+                    });
                     if fires && apply_key(&state_r, p) {
                         relayout(&state_r, &area_r, &cache_r); // layer switch: new legends
                     }
+                } else {
+                    osk_trace("release: no key was pressed");
                 }
                 area_r.queue_draw();
             });
             let state_s = state.clone();
             let area_s = area.clone();
+            let cache_s = cache.clone();
             gesture.connect_stopped(move |_g| {
-                state_s.borrow_mut().pressed = None;
+                // a cancelled touch (compositor grab, sequence denial) is
+                // still a touch the user made: if its release never arrived,
+                // the pressed key fires HERE instead of vanishing. Normal
+                // taps are untouched — `released` already consumed `pressed`
+                // — and a slide-off reached `released` too, so it still
+                // cancels. Exactly one character per tap, every path.
+                let p = state_s.borrow_mut().pressed.take();
                 area_s.queue_draw();
+                if let Some(p) = p {
+                    osk_trace("touch cancelled while pressed — firing the key");
+                    if apply_key(&state_s, p) {
+                        relayout(&state_s, &area_s, &cache_s);
+                    }
+                }
             });
             area.add_controller(gesture);
         }
@@ -513,7 +539,25 @@ fn layout_rows(sym_layer: bool) -> (Vec<Vec<KeyDef>>, (f64, f64)) {
     (layout, total)
 }
 
+/// Interaction tracing for the deck, off unless `LOSKER_OSK_TRACE` is set
+/// in the environment. It logs WHICH PATH a tap took (hit/miss, fired,
+/// slide-off, cancelled) — deliberately never WHICH key: on a password
+/// field, key identity is the password.
+fn osk_trace(msg: &str) {
+    if std::env::var_os("LOSKER_OSK_TRACE").is_some() {
+        crate::auth::trace(&format!("osk: {msg}"));
+    }
+}
+
+/// distance from a point to a cap rectangle — 0 when inside it
+fn rect_dist(x: f64, y: f64, k: &KeyDef) -> f64 {
+    let dx = (k.x - x).max(x - (k.x + k.w)).max(0.0);
+    let dy = (k.y - y).max(y - (k.y + KEY_H)).max(0.0);
+    (dx * dx + dy * dy).sqrt()
+}
+
 fn hit_test(st: &DeckState, x: f64, y: f64) -> Option<(usize, usize)> {
+    // exact containment first — the common case stays a plain rect scan
     for (ri, row) in st.layout.iter().enumerate() {
         for (ki, k) in row.iter().enumerate() {
             if x >= k.x && x <= k.x + k.w && y >= k.y && y <= k.y + KEY_H {
@@ -521,28 +565,33 @@ fn hit_test(st: &DeckState, x: f64, y: f64) -> Option<(usize, usize)> {
             }
         }
     }
-    None
+    // fingertip slop: a touch-down that missed every cap (a 6px gap, the
+    // chassis pad, just off an edge) grabs the NEAREST cap within
+    // FINGER_SLOP. Only this widget's own events reach here, so the slop
+    // extends over the deck's chassis, never past it onto the view.
+    let mut best: Option<(f64, usize, usize)> = None;
+    for (ri, row) in st.layout.iter().enumerate() {
+        for (ki, k) in row.iter().enumerate() {
+            let d = rect_dist(x, y, k);
+            if d <= FINGER_SLOP && best.map_or(true, |(b, _, _)| d < b) {
+                best = Some((d, ri, ki));
+            }
+        }
+    }
+    best.map(|(_, ri, ki)| (ri, ki))
 }
 
-/// Does the release fire the pressed key? Same key: yes. A different cap:
-/// no — that is a deliberate slide-off. No cap at all (a gap, the chassis
-/// margin, just off the deck): yes within [`RELEASE_SLOP`] of the pressed
-/// cap — fingertip drift, not intent.
+/// Does the release fire the pressed key? Within [`FINGER_SLOP`] of the
+/// pressed cap: yes. Further: no — that far a slide is deliberate, not
+/// drift. (Slop replaces the old exact-cap rule, under which a 3px drift
+/// into the gap between two caps landed on NO cap and had to be rescued
+/// by a second, smaller margin — one blurred boundary instead of two.)
 fn release_fires(st: &DeckState, press: (usize, usize), x: f64, y: f64) -> bool {
-    match hit_test(st, x, y) {
-        Some(h) => h == press,
-        None => st
-            .layout
-            .get(press.0)
-            .and_then(|row| row.get(press.1))
-            .map(|k| {
-                x >= k.x - RELEASE_SLOP
-                    && x <= k.x + k.w + RELEASE_SLOP
-                    && y >= k.y - RELEASE_SLOP
-                    && y <= k.y + KEY_H + RELEASE_SLOP
-            })
-            .unwrap_or(false),
-    }
+    st.layout
+        .get(press.0)
+        .and_then(|row| row.get(press.1))
+        .map(|k| rect_dist(x, y, k) <= FINGER_SLOP)
+        .unwrap_or(false)
 }
 
 /// Apply a key action; returns true when the deck needs a relayout.
@@ -1029,21 +1078,69 @@ mod tests {
         assert!(release_fires(&st, press, q.x + q.w / 2.0, cy));
         // drifted into the 6px gap between caps: still fires
         assert!(release_fires(&st, press, q.x + q.w + 3.0, cy));
-        // drifted into the 6px gap above the row: still fires
-        assert!(release_fires(&st, press, q.x + q.w / 2.0, q.y - 3.0));
-        // off the deck's left edge, within slop: fires
-        assert!(release_fires(&st, press, q.x - 10.0, cy));
-        // onto the neighbor cap: a deliberate slide-off — cancels
+        // a lifting finger rolls its contact centroid 20–50px on a dense
+        // panel — 25px off the pressed cap is drift, not intent
+        assert!(release_fires(&st, press, q.x - 25.0, cy));
+        assert!(release_fires(&st, press, q.x + q.w / 2.0, q.y - 25.0));
+        // onto the neighbor cap's center: a deliberate slide-off — cancels
         assert!(!release_fires(&st, press, w.x + w.w / 2.0, cy));
-        // past the slop margin with no cap under the finger: cancels
-        assert!(!release_fires(&st, press, q.x - 13.0, cy));
-        assert!(!release_fires(&st, press, q.x + q.w / 2.0, q.y - 13.0));
+        // past the slop margin: cancels
+        assert!(!release_fires(&st, press, q.x - 31.0, cy));
+        assert!(!release_fires(&st, press, q.x + q.w / 2.0, q.y - 31.0));
         // below the bottom row (space bar), within slop vs past it
         let bottom = st.layout.last().unwrap().last().unwrap();
         let space = (4, st.layout[4].len() - 1);
         let bx = bottom.x + bottom.w / 2.0;
-        assert!(release_fires(&st, space, bx, bottom.y + KEY_H + 10.0));
-        assert!(!release_fires(&st, space, bx, bottom.y + KEY_H + 13.0));
+        assert!(release_fires(&st, space, bx, bottom.y + KEY_H + 25.0));
+        assert!(!release_fires(&st, space, bx, bottom.y + KEY_H + 31.0));
+    }
+
+    #[test]
+    fn press_grabs_the_nearest_cap_when_it_misses_every_rect() {
+        let st = deck_with(None);
+        let q = &st.layout[1][0];
+        let cy = q.y + KEY_H / 2.0;
+
+        // dead-center: the plain containment case
+        assert_eq!(hit_test(&st, q.x + q.w / 2.0, cy), Some((1, 0)));
+        // in the 6px gap between Q and W: nearest cap wins (Q on the tie)
+        assert_eq!(hit_test(&st, q.x + q.w + 3.0, cy), Some((1, 0)));
+        // the chassis corner: within slop of the nearest cap
+        assert_eq!(hit_test(&st, 0.5, 0.5), Some((0, 0)));
+        // far from every cap: a real miss, not a grabbed neighbor
+        assert_eq!(hit_test(&st, -60.0, -60.0), None);
+    }
+
+    #[test]
+    fn gaps_never_swallow_a_press() {
+        // anywhere within GAP of some cap must land on SOME key: the
+        // inter-cap gaps and the chassis pads can no longer eat a
+        // touch-down on a dense panel
+        let st = deck_with(None);
+        let (tw, th) = st.total;
+        let mut probes = 0;
+        let mut x = 0.0;
+        while x < tw {
+            let mut y = 0.0;
+            while y < th {
+                let nearest = st
+                    .layout
+                    .iter()
+                    .flatten()
+                    .map(|k| rect_dist(x, y, k))
+                    .fold(f64::INFINITY, f64::min);
+                if nearest <= GAP {
+                    assert!(
+                        hit_test(&st, x, y).is_some(),
+                        "gap point ({x},{y}) swallowed"
+                    );
+                    probes += 1;
+                }
+                y += 5.0;
+            }
+            x += 5.0;
+        }
+        assert!(probes > 200, "expected a meaningful sweep, got {probes}");
     }
 
     #[test]
